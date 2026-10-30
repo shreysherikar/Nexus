@@ -1,5 +1,7 @@
 # NEXUS — Network Intelligence & Incident Management Platform
 
+[![CI](https://github.com/shreysherikar/Nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/shreysherikar/Nexus/actions/workflows/ci.yml)
+
 ## Project Overview
 
 NEXUS is an independent, modular software platform engineered to provide real-time network intelligence, telemetry analysis, topology visualization, and automated incident triage for modern telecommunications and distributed IP infrastructure.

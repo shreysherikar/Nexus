@@ -1,6 +1,7 @@
 """Topology container and graph operations."""
 
 from collections import deque
+from dataclasses import replace
 from typing import Iterator, Optional
 
 from nexus.topology.enums import NodeType
@@ -201,8 +202,13 @@ class Topology:
             NodeNotFoundError: If child or parent node does not exist.
             InvalidHierarchyError: If the relationship violates hierarchy rules.
             CycleDetectedError: If the relationship creates a cycle.
+            MissingParentError: If new_parent_id does not exist.
         """
         child = self.get_node(child_id)
+
+        # No-op if requested parent is already the current parent
+        if new_parent_id == child.parent_id:
+            return
 
         if new_parent_id is not None and new_parent_id == child_id:
             raise CycleDetectedError(f"Node '{child_id}' cannot specify itself as its parent")
@@ -232,7 +238,7 @@ class Topology:
                     f"Expected parent type: {expected_parent_type.value}"
                 )
 
-            # Cycle detection: Ensure child_id is not an ancestor of new_parent
+            # Cycle detection traversal: Ensure child_id is not an ancestor of new_parent
             curr: Optional[str] = new_parent_id
             while curr is not None:
                 if curr == child_id:
@@ -241,13 +247,18 @@ class Topology:
                     )
                 curr = self._nodes[curr].parent_id
 
+        # Construct replacement Node before modifying internal state
+        updated_child = replace(child, parent_id=new_parent_id)
+
         # Disconnect from current parent
         if child.parent_id is not None and child.parent_id in self._children:
             if child_id in self._children[child.parent_id]:
                 self._children[child.parent_id].remove(child_id)
 
+        # Update node registry with replacement
+        self._nodes[child_id] = updated_child
+
         # Connect to new parent
-        child.parent_id = new_parent_id
         if new_parent_id is not None:
             self._children[new_parent_id].append(child_id)
 

@@ -23,7 +23,7 @@ def build_simulated_network(default_status: NodeStatus = NodeStatus.ONLINE) -> T
     """
     topology = Topology()
 
-    # 1. CORE tier
+    # 1. CORE tier (1 node)
     topology.add_node(
         Node(node_id="CORE-01", node_type=NodeType.CORE, parent_id=None, status=default_status)
     )
@@ -56,9 +56,9 @@ def build_simulated_network(default_status: NodeStatus = NodeStatus.ONLINE) -> T
                 )
             )
 
-    # 4. CELL tier (18 nodes, 3 per site)
+    # 4. CELL tier (18 nodes, 3 per site, derived directly from site mapping)
+    all_sites = [site_id for site_ids in site_mapping.values() for site_id in site_ids]
     cell_idx = 1
-    all_sites = ["SITE-01", "SITE-02", "SITE-03", "SITE-04", "SITE-05", "SITE-06"]
     for site_id in all_sites:
         for _ in range(3):
             cell_id = f"CELL-{cell_idx:02d}"

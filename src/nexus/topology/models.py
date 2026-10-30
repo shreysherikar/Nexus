@@ -15,9 +15,9 @@ ALLOWED_PARENT_TYPES: dict[NodeType, Optional[NodeType]] = {
 }
 
 
-@dataclass
+@dataclass(frozen=True)
 class Node:
-    """Represents a network node entity.
+    """Represents an immutable network node entity.
 
     Attributes:
         node_id: Unique string identifier for the node (e.g. 'CORE-01', 'CELL-01').
@@ -39,22 +39,24 @@ class Node:
         # Validate and coerce node_type
         if not isinstance(self.node_type, NodeType):
             try:
-                self.node_type = NodeType(self.node_type)
+                coerced_type = NodeType(self.node_type)
             except (ValueError, TypeError) as exc:
                 raise InvalidNodeStateError(
                     f"Invalid node_type '{self.node_type}'. Expected one of: "
                     f"{', '.join(t.value for t in NodeType)}"
                 ) from exc
+            object.__setattr__(self, "node_type", coerced_type)
 
         # Validate and coerce status
         if not isinstance(self.status, NodeStatus):
             try:
-                self.status = NodeStatus(self.status)
+                coerced_status = NodeStatus(self.status)
             except (ValueError, TypeError) as exc:
                 raise InvalidNodeStateError(
                     f"Invalid status '{self.status}'. Expected one of: "
                     f"{', '.join(s.value for s in NodeStatus)}"
                 ) from exc
+            object.__setattr__(self, "status", coerced_status)
 
         # Validate parent_id type if provided
         if self.parent_id is not None:

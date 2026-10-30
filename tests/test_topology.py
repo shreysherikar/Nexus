@@ -1,5 +1,6 @@
 """Unit and integration tests for the Network Topology domain."""
 
+from dataclasses import FrozenInstanceError
 import pytest
 
 from nexus.topology import (
@@ -124,9 +125,21 @@ class TestReferenceTopology:
             NodeType.CORE,
         ]
 
+    def test_builder_default_status(self, net: Topology) -> None:
+        """Verify builder assigns default ONLINE status across all nodes."""
+        for node in net:
+            assert node.status == NodeStatus.ONLINE
+
+    def test_builder_custom_default_status(self) -> None:
+        """Verify builder applies a custom default status to all nodes."""
+        custom_net = build_simulated_network(default_status=NodeStatus.MAINTENANCE)
+        assert len(custom_net) == 27
+        for node in custom_net:
+            assert node.status == NodeStatus.MAINTENANCE
+
 
 class TestTopologyValidationAndErrors:
-    """Tests covering error cases and hierarchy constraints."""
+    """Tests covering error cases, hierarchy constraints, and reparenting safety."""
 
     def test_duplicate_node_id(self) -> None:
         """Adding a node with an existing node_id must raise DuplicateNodeError."""
@@ -203,16 +216,40 @@ class TestTopologyValidationAndErrors:
         with pytest.raises(CycleDetectedError, match="cannot specify itself as its parent"):
             topo.set_parent("AGG-01", "AGG-01")
 
-    def test_cycle_detection_indirect_cycle(self) -> None:
-        """Setting parent to an existing descendant must raise CycleDetectedError."""
-        # Build minimal valid tree: CORE-01 -> AGG-01
+    def test_set_parent_root_node_raises_invalid_hierarchy(self) -> None:
+        """Attempting to assign a parent to a CORE root node must raise InvalidHierarchyError."""
         topo = Topology()
         topo.add_node(Node("CORE-01", NodeType.CORE))
         topo.add_node(Node("AGG-01", NodeType.AGGREGATION, parent_id="CORE-01"))
 
-        # Attempt to make CORE-01 a child of AGG-01
-        with pytest.raises(InvalidHierarchyError, match="cannot have a parent"):
+        with pytest.raises(InvalidHierarchyError, match="CORE node 'CORE-01' cannot have a parent"):
             topo.set_parent("CORE-01", "AGG-01")
+
+    def test_defensive_ancestor_traversal_cycle_protection(self) -> None:
+        """Defensive test: If internal state were ever corrupted into a cycle, get_ancestors raises CycleDetectedError."""
+        topo = Topology()
+        topo.add_node(Node("CORE-01", NodeType.CORE))
+        topo.add_node(Node("AGG-01", NodeType.AGGREGATION, parent_id="CORE-01"))
+        topo.add_node(Node("SITE-01", NodeType.SITE, parent_id="AGG-01"))
+
+        # Intentionally introduce a corrupted loop in internal dictionary without public API
+        corrupted_site = Node("SITE-01", NodeType.SITE, parent_id="SITE-01")
+        topo._nodes["SITE-01"] = corrupted_site
+
+        with pytest.raises(CycleDetectedError, match="Cycle detected while traversing ancestors"):
+            topo.get_ancestors("SITE-01")
+
+    def test_defensive_descendant_traversal_cycle_protection(self) -> None:
+        """Defensive test: If internal state were ever corrupted into a cycle, get_descendants raises CycleDetectedError."""
+        topo = Topology()
+        topo.add_node(Node("CORE-01", NodeType.CORE))
+        topo.add_node(Node("AGG-01", NodeType.AGGREGATION, parent_id="CORE-01"))
+
+        # Introduce a corrupted child back-reference in internal child list
+        topo._children["AGG-01"].append("AGG-01")
+
+        with pytest.raises(CycleDetectedError, match="Cycle detected while traversing descendants"):
+            topo.get_descendants("CORE-01")
 
     def test_node_not_found_errors(self) -> None:
         """Querying non-existent nodes must raise NodeNotFoundError."""
@@ -228,9 +265,138 @@ class TestTopologyValidationAndErrors:
         with pytest.raises(NodeNotFoundError):
             topo.get_descendants("UNKNOWN")
 
+    def test_set_parent_reparents_successfully_preserving_attributes(self) -> None:
+        """Verify valid reparenting replaces frozen Node, preserving status and type."""
+        topo = build_simulated_network()
+        # Reparent SITE-01 from AGG-01 to AGG-02
+        site_before = topo.get_node("SITE-01")
+        assert site_before.parent_id == "AGG-01"
+
+        topo.set_parent("SITE-01", "AGG-02")
+        site_after = topo.get_node("SITE-01")
+
+        assert site_after.parent_id == "AGG-02"
+        assert site_after.node_type == site_before.node_type
+        assert site_after.status == site_before.status
+        assert site_after.node_id == "SITE-01"
+
+        # Verify child index updates
+        assert "SITE-01" not in [c.node_id for c in topo.get_children("AGG-01")]
+        assert "SITE-01" in [c.node_id for c in topo.get_children("AGG-02")]
+
+    def test_link_nodes_convenience_method(self) -> None:
+        """Verify link_nodes delegates to set_parent."""
+        topo = build_simulated_network()
+        topo.link_nodes(parent_id="AGG-02", child_id="SITE-01")
+        assert topo.get_node("SITE-01").parent_id == "AGG-02"
+
+    def test_failed_reparenting_preserves_original_state(self) -> None:
+        """When reparenting fails validation, neither parent nor child indices are modified."""
+        topo = build_simulated_network()
+        agg1_children_before = [c.node_id for c in topo.get_children("AGG-01")]
+        agg2_children_before = [c.node_id for c in topo.get_children("AGG-02")]
+
+        # Attempt invalid reparenting: SITE cannot have CORE as parent
+        with pytest.raises(InvalidHierarchyError):
+            topo.set_parent("SITE-01", "CORE-01")
+
+        # SITE-01 parent remains AGG-01
+        assert topo.get_node("SITE-01").parent_id == "AGG-01"
+        assert [c.node_id for c in topo.get_children("AGG-01")] == agg1_children_before
+        assert [c.node_id for c in topo.get_children("AGG-02")] == agg2_children_before
+
+        # Attempt reparenting to non-existent parent
+        with pytest.raises(MissingParentError):
+            topo.set_parent("SITE-01", "AGG-99")
+
+        assert topo.get_node("SITE-01").parent_id == "AGG-01"
+        assert [c.node_id for c in topo.get_children("AGG-01")] == agg1_children_before
+
+    def test_reparenting_to_existing_parent_preserves_child_order(self) -> None:
+        """Reparenting to the already assigned parent is a no-op that preserves exact child ordering."""
+        topo = build_simulated_network()
+        agg1_children_before = [c.node_id for c in topo.get_children("AGG-01")]
+
+        # SITE-02 is already a child of AGG-01
+        topo.set_parent("SITE-02", "AGG-01")
+        agg1_children_after = [c.node_id for c in topo.get_children("AGG-01")]
+
+        assert agg1_children_before == agg1_children_after
+
+
+class TestTopologyGraphInvariantsAndEncapsulation:
+    """Tests for graph immutability, encapsulation, and empty topology states."""
+
+    def test_empty_topology_behavior(self) -> None:
+        """Verify behavior of an empty Topology instance."""
+        topo = Topology()
+        assert len(topo) == 0
+        assert topo.all_nodes() == []
+        assert topo.get_nodes_by_type(NodeType.CORE) == []
+        assert topo.get_nodes_by_type(NodeType.CELL) == []
+        assert not topo.has_node("CORE-01")
+        assert "CORE-01" not in topo
+        with pytest.raises(NodeNotFoundError):
+            topo.get_node("CORE-01")
+
+    def test_deterministic_traversal_ordering(self) -> None:
+        """Verify deterministic BFS descendant ordering and bottom-up ancestor ordering."""
+        topo = build_simulated_network()
+
+        # Ancestors of CELL-18: strictly bottom-up
+        ancestor_ids = [a.node_id for a in topo.get_ancestors("CELL-18")]
+        assert ancestor_ids == ["SITE-06", "AGG-02", "CORE-01"]
+
+        # Descendants of CORE-01: deterministic BFS tier ordering
+        descendant_nodes = topo.get_descendants("CORE-01")
+        assert len(descendant_nodes) == 26
+        descendant_ids = [d.node_id for d in descendant_nodes]
+        # Tier 1: Aggregation
+        assert descendant_ids[:2] == ["AGG-01", "AGG-02"]
+        # Tier 2: Sites
+        assert descendant_ids[2:8] == [f"SITE-{i:02d}" for i in range(1, 7)]
+        # Tier 3: Cells
+        assert descendant_ids[8:] == [f"CELL-{i:02d}" for i in range(1, 19)]
+
+    def test_returned_collections_are_defensive_copies(self) -> None:
+        """Clearing or modifying returned lists must not mutate internal topology structures."""
+        topo = build_simulated_network()
+
+        children = topo.get_children("AGG-01")
+        assert len(children) == 3
+        children.clear()
+        assert len(topo.get_children("AGG-01")) == 3
+
+        all_nodes = topo.all_nodes()
+        all_nodes.clear()
+        assert len(topo.all_nodes()) == 27
+
+        descendants = topo.get_descendants("AGG-01")
+        descendants.clear()
+        assert len(topo.get_descendants("AGG-01")) == 12
+
+    def test_returned_node_objects_cannot_mutate_stored_topology(self) -> None:
+        """Frozen Node guarantees external callers cannot mutate node attributes."""
+        topo = build_simulated_network()
+        node = topo.get_node("SITE-01")
+
+        with pytest.raises(FrozenInstanceError):
+            node.parent_id = "AGG-02"  # type: ignore[misc]
+
+        with pytest.raises(FrozenInstanceError):
+            node.status = NodeStatus.DEGRADED  # type: ignore[misc]
+
+        with pytest.raises(FrozenInstanceError):
+            node.node_type = NodeType.CORE  # type: ignore[misc]
+
+        # Stored topology remains completely untouched
+        assert topo.get_node("SITE-01").parent_id == "AGG-01"
+        assert topo.get_node("SITE-01").status == NodeStatus.ONLINE
+        assert "SITE-01" in [c.node_id for c in topo.get_children("AGG-01")]
+
 
 class TestNodeEntityValidation:
-    """Tests for Node entity state, validation, and representation."""
+    """Tests for Node entity state, validation, immutability, and representation."""
 
     def test_valid_node_creation(self) -> None:
         node = Node(
@@ -244,8 +410,18 @@ class TestNodeEntityValidation:
         assert node.parent_id is None
         assert node.status == NodeStatus.ONLINE
 
+    def test_frozen_node_rejects_direct_attribute_assignment(self) -> None:
+        """Node instances must reject attribute mutation with FrozenInstanceError."""
+        node = Node("CORE-01", NodeType.CORE)
+        with pytest.raises(FrozenInstanceError):
+            node.node_id = "CORE-02"  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            node.status = NodeStatus.OFFLINE  # type: ignore[misc]
+        with pytest.raises(FrozenInstanceError):
+            node.parent_id = "SOME-PARENT"  # type: ignore[misc]
+
     def test_string_coercion_for_enums(self) -> None:
-        """Valid string names for enums should be coerced successfully."""
+        """Valid string names for enums should be coerced successfully in frozen dataclass."""
         node = Node(
             node_id="CELL-01",
             node_type="CELL",  # type: ignore[arg-type]
