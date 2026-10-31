@@ -87,7 +87,7 @@ class RootCauseHypothesis:
     cause_type: RootCauseType
     target_id: str
     target_type: TargetType
-    confidence_score: float
+    confidence_score: Optional[float]
     explanation: str
     evidence_items: tuple[EvidenceItem, ...]
     group_id: str
@@ -112,13 +112,14 @@ class RootCauseHypothesis:
             except ValueError as exc:
                 raise ValueError(f"Invalid TargetType: {self.target_type}") from exc
 
-        # Score validation: must be finite float in [0.0, 1.0]
-        if isinstance(self.confidence_score, bool) or not isinstance(self.confidence_score, (int, float)):
-            raise ValueError(f"confidence_score must be a float, got {type(self.confidence_score).__name__}")
-        f_score = float(self.confidence_score)
-        if not math.isfinite(f_score) or f_score < 0.0 or f_score > 1.0:
-            raise ValueError(f"confidence_score must be a finite float between 0.0 and 1.0, got {f_score}")
-        object.__setattr__(self, "confidence_score", round(f_score, 4))
+        # Score validation: when provided, must be finite float in [0.0, 1.0] (reject booleans, NaN, infinity)
+        if self.confidence_score is not None:
+            if isinstance(self.confidence_score, bool) or not isinstance(self.confidence_score, (int, float)):
+                raise ValueError(f"confidence_score must be a float, got {type(self.confidence_score).__name__}")
+            f_score = float(self.confidence_score)
+            if not math.isfinite(f_score) or f_score < 0.0 or f_score > 1.0:
+                raise ValueError(f"confidence_score must be a finite float between 0.0 and 1.0, got {f_score}")
+            object.__setattr__(self, "confidence_score", round(f_score, 4))
 
         if not isinstance(self.evidence_items, tuple):
             object.__setattr__(self, "evidence_items", tuple(self.evidence_items))
