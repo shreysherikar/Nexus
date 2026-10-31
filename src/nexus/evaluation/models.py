@@ -84,3 +84,79 @@ class EvaluationReport:
             object.__setattr__(self, "recall", self.fault_recall)
         if self.f1_score is None:
             object.__setattr__(self, "f1_score", self.hybrid_f1_score)
+
+
+@dataclass(frozen=True)
+class RCAGroundTruthMatch:
+    """Evaluation record comparing an injected fault to its diagnosed RCA hypothesis.
+
+    Attributes:
+        fault_id: Ground-truth fault identifier.
+        fault_type: Expected fault category.
+        target_id: Expected target entity identifier (node or link).
+        matched_group_id: Matched correlation group ID, if any.
+        diagnosed_cause_type: Cause category predicted by primary RCA hypothesis.
+        diagnosed_target_id: Target entity predicted by primary RCA hypothesis.
+        confidence_score: Confidence score of the primary hypothesis.
+        cause_correct: Whether the diagnosed cause type matches ground truth.
+        target_correct: Whether the diagnosed target matches ground truth (None if not independently verifiable).
+        both_correct: Whether both cause type and target match ground truth.
+        is_unknown: Whether the diagnosis concluded UNKNOWN / insufficient evidence.
+        target_verifiable: Whether target correctness could be independently verified.
+    """
+
+    fault_id: str
+    fault_type: str
+    target_id: str
+    matched_group_id: Optional[str]
+    diagnosed_cause_type: Optional[str]
+    diagnosed_target_id: Optional[str]
+    confidence_score: Optional[float]
+    cause_correct: bool
+    target_correct: Optional[bool]
+    both_correct: bool
+    is_unknown: bool
+    target_verifiable: bool = True
+
+
+@dataclass(frozen=True)
+class RCAEvaluationReport:
+    """Benchmark evaluation summary comparing correlation and RCA results against ground truth.
+
+    Attributes:
+        total_faults: Number of injected ground-truth fault events.
+        diagnosed_faults: Faults receiving a non-UNKNOWN diagnosis.
+        correct_cause_count: Faults where top-1 cause type matched ground truth.
+        correct_target_count: Faults where suspected target matched ground truth.
+        correct_both_count: Faults where both cause type and target matched ground truth.
+        unknown_count: Faults where RCA concluded UNKNOWN / INSUFFICIENT_EVIDENCE.
+        misdiagnosed_count: Faults diagnosed with a non-UNKNOWN but incorrect cause type.
+        unevaluable_target_count: Faults where target correctness could not be independently verified.
+        top_1_cause_accuracy: Ratio of correct_cause_count / total_faults.
+        target_accuracy: Ratio of correct_target_count / total_faults.
+        both_accuracy: Ratio of correct_both_count / total_faults.
+        diagnosis_coverage: Proportion of faults given a non-UNKNOWN diagnosis.
+        total_alarms: Total unique alarms evaluated.
+        total_groups: Total correlation groups formed.
+        alarm_reduction_ratio: Noise reduction ratio (total_alarms - total_groups) / total_alarms.
+        fault_matches: Detailed match records per ground-truth fault.
+        unmatched_group_ids: Correlation group IDs that did not map to any injected fault.
+    """
+
+    total_faults: int
+    diagnosed_faults: int
+    correct_cause_count: int
+    correct_target_count: int
+    correct_both_count: int
+    unknown_count: int
+    misdiagnosed_count: int
+    top_1_cause_accuracy: float
+    target_accuracy: float
+    both_accuracy: float
+    diagnosis_coverage: float
+    total_alarms: int
+    total_groups: int
+    alarm_reduction_ratio: float
+    fault_matches: tuple[RCAGroundTruthMatch, ...] = ()
+    unmatched_group_ids: tuple[str, ...] = ()
+    unevaluable_target_count: int = 0
