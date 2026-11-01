@@ -23,6 +23,17 @@ from nexus.telemetry.profiles import (
     NodeOperatingProfile,
 )
 
+from nexus.telemetry.orchestrator import (
+    TelemetryPipeline,
+    get_telemetry_pipeline,
+    set_telemetry_pipeline,
+)
+from nexus.telemetry.store import (
+    TelemetryStore,
+    get_telemetry_store,
+    set_telemetry_store,
+)
+
 __all__ = [
     "DEFAULT_AGGREGATION_PROFILE",
     "DEFAULT_CELL_PROFILE",
@@ -40,4 +51,10 @@ __all__ = [
     "ReliabilityMetrics",
     "SyntheticTelemetryGenerator",
     "TelemetryError",
+    "TelemetryPipeline",
+    "TelemetryStore",
+    "get_telemetry_pipeline",
+    "get_telemetry_store",
+    "set_telemetry_pipeline",
+    "set_telemetry_store",
 ]

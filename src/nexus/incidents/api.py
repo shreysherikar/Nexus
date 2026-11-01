@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import os
 from typing import Any, Mapping, Optional
@@ -48,18 +49,20 @@ from nexus.rca.models import (
     RootCauseType,
     TargetType,
 )
-from nexus.topology import NodeType, Topology, build_simulated_network
-
-
-_default_topology: Optional[Topology] = None
+from nexus.detection.api import router as alarm_router
+from nexus.detection.service import get_alarm_service
+from nexus.events.api import router as websocket_router
+from nexus.events.broadcaster import get_broadcaster
+from nexus.telemetry.api import router as telemetry_router
+from nexus.telemetry.orchestrator import get_telemetry_pipeline
+from nexus.telemetry.store import get_telemetry_store
+from nexus.topology import NodeStatus, NodeType, Topology
+from nexus.topology.api import get_topology_registry, router as topology_router
 
 
 def get_topology() -> Topology:
     """Retrieve or initialize the trusted reference topology."""
-    global _default_topology
-    if _default_topology is None:
-        _default_topology = build_simulated_network()
-    return _default_topology
+    return get_topology_registry()
 
 
 def resolve_node_tier(node_id: Optional[str], topo: Topology) -> Optional[NodeType]:
@@ -172,7 +175,10 @@ def get_incident_service() -> IncidentService:
                 )
 
         repo = IncidentRepository.from_engine(engine)
-        _default_service = IncidentService(repository=repo)
+        _default_service = IncidentService(
+            repository=repo,
+            event_publisher=get_broadcaster().publish,
+        )
     return _default_service
 
 
@@ -395,8 +401,12 @@ def get_metrics(
         mtta_seconds=metrics.mtta_seconds,
         mttr_seconds=metrics.mttr_seconds,
         mttd_seconds=metrics.mttd_seconds,
+        total_incidents_evaluated=metrics.total_incidents_evaluated,
+        compliant_incident_count=metrics.compliant_incident_count,
+        breached_incident_count=metrics.breached_incident_count,
         ack_sla_breached_count=metrics.ack_sla_breached_count,
         resolve_sla_breached_count=metrics.resolve_sla_breached_count,
+        sla_compliance_pct=metrics.sla_compliance_pct,
         as_of=metrics.as_of,
     )
 
@@ -510,6 +520,34 @@ def get_timeline(
 
 def create_app() -> FastAPI:
     """FastAPI application factory."""
+
+    @asynccontextmanager
+    async def lifespan(app_instance: FastAPI):
+        # Register exactly one listener for each running application instance
+        broadcaster = get_broadcaster()
+        topo = get_topology_registry()
+
+        def on_topology_status_change(
+            node_id: str, old_status: NodeStatus, new_status: NodeStatus, ts: datetime
+        ) -> None:
+            broadcaster.publish(
+                "TOPOLOGY_STATUS_CHANGED",
+                {
+                    "node_id": node_id,
+                    "previous_status": old_status.value,
+                    "new_status": new_status.value,
+                    "timestamp": ts.isoformat(),
+                },
+                timestamp=ts,
+            )
+
+        topo.add_status_listener(on_topology_status_change)
+        try:
+            yield
+        finally:
+            # Deterministically remove callback on shutdown
+            topo.remove_status_listener(on_topology_status_change)
+
     app = FastAPI(
         title="NEXUS Incident Management API",
         version="1.0.0",
@@ -517,6 +555,7 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
+        lifespan=lifespan,
     )
 
     @app.exception_handler(IncidentNotFoundError)
@@ -555,7 +594,19 @@ def create_app() -> FastAPI:
     async def health_check() -> dict[str, str]:
         return {"status": "healthy"}
 
+    # Wire authentic event publishers to live broadcaster
+    broadcaster = get_broadcaster()
+    topo = get_topology_registry()
+    get_telemetry_store().set_event_publisher(broadcaster.publish)
+    get_telemetry_store().set_topology(topo)
+    get_alarm_service().set_event_publisher(broadcaster.publish)
+    get_telemetry_pipeline()  # Initialize pipeline
+
     app.include_router(router)
+    app.include_router(topology_router)
+    app.include_router(telemetry_router)
+    app.include_router(alarm_router)
+    app.include_router(websocket_router)
     return app
 
 

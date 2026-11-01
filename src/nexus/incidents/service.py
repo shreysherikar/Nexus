@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from nexus.correlation.models import CorrelationGroup
 from nexus.detection.models import _normalize_utc_timestamp
@@ -28,6 +28,9 @@ from nexus.incidents.sla import SLACalculator
 from nexus.rca.models import RCAResult, RootCauseType, TargetType
 
 
+EventPublisher = Callable[[str, dict[str, Any]], None]
+
+
 class IncidentService:
     """Core domain service for creating, managing, and tracking operational incidents."""
 
@@ -37,11 +40,24 @@ class IncidentService:
         severity_policy: Optional[OperationalSeverityPolicy] = None,
         sla_calculator: Optional[SLACalculator] = None,
         metrics_calculator: Optional[MetricsCalculator] = None,
+        event_publisher: Optional[EventPublisher] = None,
     ) -> None:
         self._repo = repository
         self._severity_policy = severity_policy or OperationalSeverityPolicy()
         self._sla_calculator = sla_calculator or SLACalculator()
         self._metrics_calculator = metrics_calculator or MetricsCalculator(self._sla_calculator)
+        self._event_publisher = event_publisher
+
+    def set_event_publisher(self, publisher: Optional[EventPublisher]) -> None:
+        """Attach or detach an event publisher callback."""
+        self._event_publisher = publisher
+
+    def _publish(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self._event_publisher:
+            try:
+                self._event_publisher(event_type, payload)
+            except Exception:
+                pass
 
     def create_incident(
         self,
@@ -168,7 +184,21 @@ class IncidentService:
             timeline=(created_event,),
         )
 
-        return self._repo.create(incident)
+        persisted = self._repo.create(incident)
+        self._publish(
+            "INCIDENT_CREATED",
+            {
+                "incident_id": persisted.incident_id,
+                "status": persisted.status.value,
+                "severity": persisted.severity.value,
+                "priority": persisted.priority.value,
+                "title": persisted.title,
+                "correlation_group_id": persisted.correlation_group_id,
+                "affected_node_ids": list(persisted.affected_node_ids),
+                "created_at": persisted.created_at.isoformat(),
+            },
+        )
+        return persisted
 
     def acknowledge_incident(
         self,
@@ -183,7 +213,17 @@ class IncidentService:
             raise IncidentNotFoundError(incident_id)
 
         updated = incident.acknowledge(actor=actor, timestamp=timestamp, actor_type=actor_type)
-        return self._repo.update(updated)
+        persisted = self._repo.update(updated)
+        self._publish(
+            "INCIDENT_ACKNOWLEDGED",
+            {
+                "incident_id": persisted.incident_id,
+                "status": persisted.status.value,
+                "acknowledged_by": actor,
+                "acknowledged_at": persisted.acknowledged_at.isoformat() if persisted.acknowledged_at else None,
+            },
+        )
+        return persisted
 
     def resolve_incident(
         self,
@@ -201,7 +241,18 @@ class IncidentService:
         updated = incident.resolve(
             actor=actor, timestamp=timestamp, notes=notes, actor_type=actor_type
         )
-        return self._repo.update(updated)
+        persisted = self._repo.update(updated)
+        self._publish(
+            "INCIDENT_RESOLVED",
+            {
+                "incident_id": persisted.incident_id,
+                "status": persisted.status.value,
+                "resolved_by": actor,
+                "resolved_at": persisted.resolved_at.isoformat() if persisted.resolved_at else None,
+                "notes": notes,
+            },
+        )
+        return persisted
 
     def get_incident(self, incident_id: str) -> Incident:
         """Retrieve an incident by ID."""

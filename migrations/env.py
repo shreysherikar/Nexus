@@ -54,13 +54,18 @@ def get_url() -> str:
     env_url = os.getenv("DATABASE_URL") or os.getenv("NEXUS_DATABASE_URL")
     default_pg_url = "postgresql+psycopg://nexus:nexus@localhost:5432/nexus_db"
 
+    def _normalize_driver(raw_url: str) -> str:
+        if raw_url.startswith("postgresql://"):
+            return raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return raw_url
+
     # 2. CLI execution: prefer DATABASE_URL from environment
     is_cli = getattr(context.config, "cmd_opts", None) is not None
     if is_cli:
         if env_url and env_url.strip():
-            return env_url.strip()
+            return _normalize_driver(env_url.strip())
         if config_url and config_url.strip():
-            return config_url.strip()
+            return _normalize_driver(config_url.strip())
         return default_pg_url
 
     # 3. Programmatic execution: respect supplied Config option
@@ -68,12 +73,12 @@ def get_url() -> str:
         # If config_url is the generic default and DATABASE_URL is set, use DATABASE_URL;
         # if config_url was explicitly set or differs from default, respect config_url.
         if config_url.strip() == default_pg_url and env_url and env_url.strip():
-            return env_url.strip()
-        return config_url.strip()
+            return _normalize_driver(env_url.strip())
+        return _normalize_driver(config_url.strip())
 
     # 4. Fallback to env_url or default
     if env_url and env_url.strip():
-        return env_url.strip()
+        return _normalize_driver(env_url.strip())
     return default_pg_url
 
 

@@ -335,6 +335,8 @@ class TestPostgreSQLIntegration:
     @pytest.fixture
     def pg_engine(self):
         url = os.getenv("DATABASE_URL")
+        if url and url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
         engine = create_engine(url)
         # Verify schema exists from Alembic migration (do not bypass via ORM auto-creation)
         from sqlalchemy import inspect

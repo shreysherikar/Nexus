@@ -243,8 +243,12 @@ class IncidentMetricsResponse(BaseModel):
     mtta_seconds: Optional[float] = None
     mttr_seconds: Optional[float] = None
     mttd_seconds: Optional[float] = None
+    total_incidents_evaluated: int
+    compliant_incident_count: int
+    breached_incident_count: int
     ack_sla_breached_count: int
     resolve_sla_breached_count: int
+    sla_compliance_pct: Optional[float] = None
     as_of: datetime
 
 

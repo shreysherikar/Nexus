@@ -1,6 +1,11 @@
 """NEXUS Anomaly Detection & Alarm Generation package."""
 
 from nexus.detection.alarm_manager import AlarmManager
+from nexus.detection.service import (
+    AlarmService,
+    get_alarm_service,
+    set_alarm_service,
+)
 from nexus.detection.engine import AnomalyDetectionEngine, DetectionBatchResult
 from nexus.detection.exceptions import (
     DetectionError,
@@ -36,6 +41,7 @@ from nexus.detection.threshold_detector import (
 __all__ = [
     "Alarm",
     "AlarmManager",
+    "AlarmService",
     "AlarmStatus",
     "AnomalyDetectionEngine",
     "AnomalyEvent",

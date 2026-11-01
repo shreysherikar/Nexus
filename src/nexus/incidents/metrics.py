@@ -36,8 +36,12 @@ class IncidentMetricsReport:
     mtta_seconds: Optional[float]
     mttr_seconds: Optional[float]
     mttd_seconds: Optional[float]
+    total_incidents_evaluated: int
+    compliant_incident_count: int
+    breached_incident_count: int
     ack_sla_breached_count: int
     resolve_sla_breached_count: int
+    sla_compliance_pct: Optional[float]
     as_of: datetime
 
 
@@ -67,6 +71,9 @@ class MetricsCalculator:
         count_resolve = 0
         ack_breaches = 0
         resolve_breaches = 0
+        total_evaluated = 0
+        compliant_count = 0
+        breached_count = 0
 
         for inc in incidents:
             total_count += 1
@@ -90,8 +97,29 @@ class MetricsCalculator:
                 total_resolve_seconds += sla_status.resolve_time_seconds
                 count_resolve += 1
 
+            # Authoritative SLA compliance evaluation:
+            # An incident is eligible for SLA evaluation if:
+            # 1. It breached at least one SLA target (ack_breached or resolve_breached), OR
+            # 2. It completed an applicable SLA obligation (acknowledged or resolved) without breaching.
+            # Incidents that are open, unacknowledged, unresolved, and whose deadlines have not yet expired
+            # have no applicable completed or evaluable SLA obligations as of eval_time and are excluded.
+            has_breached = sla_status.ack_breached or sla_status.resolve_breached
+            has_completed_obligation = (inc.acknowledged_at is not None) or (inc.resolved_at is not None)
+
+            if has_breached:
+                total_evaluated += 1
+                breached_count += 1
+            elif has_completed_obligation:
+                total_evaluated += 1
+                compliant_count += 1
+
         mtta = (total_ack_seconds / count_ack) if count_ack > 0 else None
         mttr = (total_resolve_seconds / count_resolve) if count_resolve > 0 else None
+        sla_compliance_pct = (
+            round((compliant_count / total_evaluated) * 100.0, 2)
+            if total_evaluated > 0
+            else None
+        )
 
         return IncidentMetricsReport(
             total_incidents=total_count,
@@ -101,7 +129,11 @@ class MetricsCalculator:
             mtta_seconds=round(mtta, 2) if mtta is not None else None,
             mttr_seconds=round(mttr, 2) if mttr is not None else None,
             mttd_seconds=round(mttd_seconds, 2) if mttd_seconds is not None else None,
+            total_incidents_evaluated=total_evaluated,
+            compliant_incident_count=compliant_count,
+            breached_incident_count=breached_count,
             ack_sla_breached_count=ack_breaches,
             resolve_sla_breached_count=resolve_breaches,
+            sla_compliance_pct=sla_compliance_pct,
             as_of=eval_time,
         )

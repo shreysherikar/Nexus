@@ -1,6 +1,7 @@
 """Domain models for network topology nodes and hierarchy rules."""
 
 from dataclasses import dataclass
+import math
 from typing import Optional
 
 from nexus.topology.enums import NodeStatus, NodeType
@@ -24,12 +25,16 @@ class Node:
         node_type: Tier in the hierarchy (CORE, AGGREGATION, SITE, CELL).
         parent_id: Optional string identifier of the parent node.
         status: Current operational status (ONLINE, OFFLINE, DEGRADED, MAINTENANCE).
+        latitude: Optional physical latitude in WGS-84 degrees [-90.0, 90.0].
+        longitude: Optional physical longitude in WGS-84 degrees [-180.0, 180.0].
     """
 
     node_id: str
     node_type: NodeType
     parent_id: Optional[str] = None
     status: NodeStatus = NodeStatus.ONLINE
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
     def __post_init__(self) -> None:
         # Validate node_id
@@ -63,6 +68,39 @@ class Node:
             if not isinstance(self.parent_id, str) or not self.parent_id.strip():
                 raise InvalidNodeStateError("parent_id must be None or a non-empty string")
 
+        # Validate coordinates: must be both present or both absent
+        if (self.latitude is None) != (self.longitude is None):
+            raise InvalidNodeStateError(
+                "Incomplete coordinate pair: latitude and longitude must both be present or both absent"
+            )
+
+        if self.latitude is not None and self.longitude is not None:
+            # Check booleans (bool is a subclass of int in Python)
+            if isinstance(self.latitude, bool) or not isinstance(self.latitude, (int, float)):
+                raise InvalidNodeStateError(
+                    f"latitude must be a numeric value, got {type(self.latitude).__name__}"
+                )
+            if isinstance(self.longitude, bool) or not isinstance(self.longitude, (int, float)):
+                raise InvalidNodeStateError(
+                    f"longitude must be a numeric value, got {type(self.longitude).__name__}"
+                )
+
+            lat_f = float(self.latitude)
+            lon_f = float(self.longitude)
+
+            if not math.isfinite(lat_f):
+                raise InvalidNodeStateError(f"latitude must be a finite number, got {lat_f}")
+            if not math.isfinite(lon_f):
+                raise InvalidNodeStateError(f"longitude must be a finite number, got {lon_f}")
+
+            if not (-90.0 <= lat_f <= 90.0):
+                raise InvalidNodeStateError(f"latitude ({lat_f}) is out of range [-90.0, 90.0]")
+            if not (-180.0 <= lon_f <= 180.0):
+                raise InvalidNodeStateError(f"longitude ({lon_f}) is out of range [-180.0, 180.0]")
+
+            object.__setattr__(self, "latitude", lat_f)
+            object.__setattr__(self, "longitude", lon_f)
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Node):
             return False
@@ -71,13 +109,16 @@ class Node:
             and self.node_type == other.node_type
             and self.parent_id == other.parent_id
             and self.status == other.status
+            and self.latitude == other.latitude
+            and self.longitude == other.longitude
         )
 
     def __hash__(self) -> int:
         return hash(self.node_id)
 
     def __repr__(self) -> str:
+        coords = f", latitude={self.latitude}, longitude={self.longitude}" if self.latitude is not None else ""
         return (
             f"Node(node_id={self.node_id!r}, node_type={self.node_type.value!r}, "
-            f"parent_id={self.parent_id!r}, status={self.status.value!r})"
+            f"parent_id={self.parent_id!r}, status={self.status.value!r}{coords})"
         )

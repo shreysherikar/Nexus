@@ -2,9 +2,10 @@
 
 from collections import deque
 from dataclasses import replace
-from typing import Iterator, Optional
+from datetime import datetime, timezone
+from typing import Callable, Iterator, Optional
 
-from nexus.topology.enums import NodeType
+from nexus.topology.enums import NodeStatus, NodeType
 from nexus.topology.exceptions import (
     CycleDetectedError,
     DuplicateNodeError,
@@ -21,6 +22,27 @@ class Topology:
     def __init__(self) -> None:
         self._nodes: dict[str, Node] = {}
         self._children: dict[str, list[str]] = {}
+        self._status_listeners: list[
+            Callable[[str, NodeStatus, NodeStatus, datetime], None]
+        ] = []
+
+    def add_status_listener(
+        self, listener: Callable[[str, NodeStatus, NodeStatus, datetime], None]
+    ) -> None:
+        """Register a callback for node status changes."""
+        if listener not in self._status_listeners:
+            self._status_listeners.append(listener)
+
+    def remove_status_listener(
+        self, listener: Callable[[str, NodeStatus, NodeStatus, datetime], None]
+    ) -> None:
+        """Unregister a status change callback."""
+        if listener in self._status_listeners:
+            self._status_listeners.remove(listener)
+
+    def clear_status_listeners(self) -> None:
+        """Clear all registered status listeners."""
+        self._status_listeners.clear()
 
     def add_node(self, node: Node) -> None:
         """Add a node to the topology, validating hierarchy, parent existence, and uniqueness.
@@ -269,6 +291,62 @@ class Topology:
     def get_nodes_by_type(self, node_type: NodeType) -> list[Node]:
         """Return all nodes belonging to a specific tier."""
         return [node for node in self._nodes.values() if node.node_type == node_type]
+
+    def update_node_status(self, node_id: str, new_status: NodeStatus) -> Node:
+        """Update the operational status of an existing node.
+
+        Emits a status change event to registered listeners ONLY when the status
+        actually changes. No-op updates (new_status == current_status) do not emit events.
+
+        Args:
+            node_id: Identifier of the node.
+            new_status: New operational status.
+
+        Returns:
+            The updated Node instance.
+
+        Raises:
+            NodeNotFoundError: If the node does not exist.
+        """
+        node = self.get_node(node_id)
+        if not isinstance(new_status, NodeStatus):
+            new_status = NodeStatus(new_status)
+        if node.status == new_status:
+            return node
+
+        old_status = node.status
+        updated = replace(node, status=new_status)
+        self._nodes[node_id] = updated
+
+        now = datetime.now(timezone.utc)
+        for listener in list(self._status_listeners):
+            try:
+                listener(node_id, old_status, new_status, now)
+            except Exception:
+                pass
+        return updated
+
+    def update_node_coordinates(
+        self, node_id: str, latitude: Optional[float], longitude: Optional[float]
+    ) -> Node:
+        """Update geographic coordinates of an existing node.
+
+        Args:
+            node_id: Identifier of the node.
+            latitude: Latitude in degrees [-90.0, 90.0] or None.
+            longitude: Longitude in degrees [-180.0, 180.0] or None.
+
+        Returns:
+            The updated Node instance.
+
+        Raises:
+            NodeNotFoundError: If the node does not exist.
+            InvalidNodeStateError: If coordinate values or pairing are invalid.
+        """
+        node = self.get_node(node_id)
+        updated = replace(node, latitude=latitude, longitude=longitude)
+        self._nodes[node_id] = updated
+        return updated
 
     def all_nodes(self) -> list[Node]:
         """Return a list of all nodes registered in the topology."""

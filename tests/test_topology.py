@@ -462,3 +462,72 @@ class TestNodeEntityValidation:
         assert n1 == n2
         assert n1 != n3
         assert hash(n1) == hash(n2)
+
+    def test_valid_geographic_coordinates(self) -> None:
+        """Valid latitude and longitude are preserved accurately."""
+        node = Node(
+            node_id="SITE-01",
+            node_type=NodeType.SITE,
+            parent_id="AGG-01",
+            latitude=37.7749,
+            longitude=-122.4194,
+        )
+        assert node.latitude == 37.7749
+        assert node.longitude == -122.4194
+        assert "latitude=37.7749" in repr(node)
+
+    def test_missing_coordinates_remain_none(self) -> None:
+        """When omitted, coordinates must strictly default to None without fabrication."""
+        node = Node("CORE-01", NodeType.CORE)
+        assert node.latitude is None
+        assert node.longitude is None
+
+    def test_incomplete_coordinate_pairs_rejected(self) -> None:
+        """Providing only latitude or only longitude must be rejected."""
+        with pytest.raises(InvalidNodeStateError, match="Incomplete coordinate pair"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=37.7749, longitude=None)
+
+        with pytest.raises(InvalidNodeStateError, match="Incomplete coordinate pair"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=None, longitude=-122.4194)
+
+    def test_out_of_range_coordinates_rejected(self) -> None:
+        """Out of range latitude or longitude must be rejected."""
+        with pytest.raises(InvalidNodeStateError, match="latitude .* is out of range"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=91.0, longitude=0.0)
+
+        with pytest.raises(InvalidNodeStateError, match="latitude .* is out of range"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=-90.1, longitude=0.0)
+
+        with pytest.raises(InvalidNodeStateError, match="longitude .* is out of range"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=0.0, longitude=180.1)
+
+        with pytest.raises(InvalidNodeStateError, match="longitude .* is out of range"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=0.0, longitude=-180.1)
+
+    def test_non_finite_coordinates_rejected(self) -> None:
+        """NaN and inf coordinate values must be rejected."""
+        with pytest.raises(InvalidNodeStateError, match="latitude must be a finite number"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=float("nan"), longitude=0.0)
+
+        with pytest.raises(InvalidNodeStateError, match="longitude must be a finite number"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=0.0, longitude=float("inf"))
+
+    def test_boolean_and_non_numeric_coordinates_rejected(self) -> None:
+        """Booleans and non-numeric coordinate types must be rejected."""
+        with pytest.raises(InvalidNodeStateError, match="latitude must be a numeric value"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=True, longitude=0.0)  # type: ignore[arg-type]
+
+        with pytest.raises(InvalidNodeStateError, match="longitude must be a numeric value"):
+            Node("SITE-01", NodeType.SITE, parent_id="AGG-01", latitude=0.0, longitude="west")  # type: ignore[arg-type]
+
+    def test_topology_update_node_status_and_coordinates(self) -> None:
+        """Topology methods update_node_status and update_node_coordinates update node registry."""
+        topo = build_simulated_network()
+        updated_status = topo.update_node_status("SITE-01", NodeStatus.DEGRADED)
+        assert updated_status.status == NodeStatus.DEGRADED
+        assert topo.get_node("SITE-01").status == NodeStatus.DEGRADED
+
+        updated_coords = topo.update_node_coordinates("SITE-01", 40.7128, -74.0060)
+        assert updated_coords.latitude == 40.7128
+        assert updated_coords.longitude == -74.0060
+        assert topo.get_node("SITE-01").latitude == 40.7128

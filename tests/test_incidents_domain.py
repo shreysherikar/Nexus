@@ -641,6 +641,10 @@ class TestIncidentMetrics:
         assert report.mttd_seconds is None
         assert report.ack_sla_breached_count == 0
         assert report.resolve_sla_breached_count == 0
+        assert report.total_incidents_evaluated == 0
+        assert report.compliant_incident_count == 0
+        assert report.breached_incident_count == 0
+        assert report.sla_compliance_pct is None
 
     def test_mtta_and_mttr_averaging(self) -> None:
         t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -740,6 +744,304 @@ class TestIncidentMetrics:
         # inc3 ack_deadline is 15m, evaluation time is 25m -> ack SLA breached!
         assert report.ack_sla_breached_count == 1
         assert report.resolve_sla_breached_count == 0
+        assert report.total_incidents_evaluated == 3
+        assert report.compliant_incident_count == 2
+        assert report.breached_incident_count == 1
+        assert report.sla_compliance_pct == 66.67
+
+    def test_sla_compliance_zero_incidents_evaluated(self) -> None:
+        calc = MetricsCalculator()
+        report = calc.compute_metrics(incidents=[])
+        assert report.total_incidents_evaluated == 0
+        assert report.compliant_incident_count == 0
+        assert report.breached_incident_count == 0
+        assert report.sla_compliance_pct is None
+
+    def test_sla_compliance_all_compliant(self) -> None:
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        calc = MetricsCalculator()
+        inc = Incident(
+            incident_id="INC-COMP-1",
+            correlation_group_id="GRP-1",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Compliant",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=15),
+            resolve_deadline=t0 + timedelta(hours=1),
+            acknowledged_at=t0 + timedelta(minutes=5),
+            acknowledged_by="op1",
+            resolved_at=t0 + timedelta(minutes=30),
+            resolved_by="op1",
+        )
+        report = calc.compute_metrics([inc], as_of=t0 + timedelta(hours=2))
+        assert report.total_incidents == 1
+        assert report.total_incidents_evaluated == 1
+        assert report.compliant_incident_count == 1
+        assert report.breached_incident_count == 0
+        assert report.ack_sla_breached_count == 0
+        assert report.resolve_sla_breached_count == 0
+        assert report.sla_compliance_pct == 100.0
+
+    def test_sla_compliance_only_ack_breaches(self) -> None:
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        calc = MetricsCalculator()
+        inc = Incident(
+            incident_id="INC-ACK-BREACH",
+            correlation_group_id="GRP-1",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Ack Breach",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=15),
+            resolve_deadline=t0 + timedelta(hours=1),
+            acknowledged_at=t0 + timedelta(minutes=20),
+            acknowledged_by="op1",
+            resolved_at=t0 + timedelta(minutes=45),
+            resolved_by="op1",
+        )
+        report = calc.compute_metrics([inc], as_of=t0 + timedelta(hours=2))
+        assert report.total_incidents_evaluated == 1
+        assert report.compliant_incident_count == 0
+        assert report.breached_incident_count == 1
+        assert report.ack_sla_breached_count == 1
+        assert report.resolve_sla_breached_count == 0
+        assert report.sla_compliance_pct == 0.0
+
+    def test_sla_compliance_only_resolve_breaches(self) -> None:
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        calc = MetricsCalculator()
+        inc = Incident(
+            incident_id="INC-RES-BREACH",
+            correlation_group_id="GRP-1",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Resolve Breach",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=15),
+            resolve_deadline=t0 + timedelta(hours=1),
+            acknowledged_at=t0 + timedelta(minutes=10),
+            acknowledged_by="op1",
+            resolved_at=t0 + timedelta(minutes=75),
+            resolved_by="op1",
+        )
+        report = calc.compute_metrics([inc], as_of=t0 + timedelta(hours=2))
+        assert report.total_incidents_evaluated == 1
+        assert report.compliant_incident_count == 0
+        assert report.breached_incident_count == 1
+        assert report.ack_sla_breached_count == 0
+        assert report.resolve_sla_breached_count == 1
+        assert report.sla_compliance_pct == 0.0
+
+    def test_sla_compliance_both_ack_and_resolve_breaches_counted_once(self) -> None:
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        calc = MetricsCalculator()
+        inc = Incident(
+            incident_id="INC-DUAL-BREACH",
+            correlation_group_id="GRP-1",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Dual Breach",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=15),
+            resolve_deadline=t0 + timedelta(hours=1),
+            acknowledged_at=t0 + timedelta(minutes=25),
+            acknowledged_by="op1",
+            resolved_at=t0 + timedelta(minutes=80),
+            resolved_by="op1",
+        )
+        report = calc.compute_metrics([inc], as_of=t0 + timedelta(hours=2))
+        assert report.total_incidents_evaluated == 1
+        assert report.compliant_incident_count == 0
+        assert report.breached_incident_count == 1
+        assert report.ack_sla_breached_count == 1
+        assert report.resolve_sla_breached_count == 1
+        assert report.sla_compliance_pct == 0.0
+
+    def test_sla_compliance_mixed_compliant_and_breached(self) -> None:
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        calc = MetricsCalculator()
+        inc_comp1 = Incident(
+            incident_id="INC-C1",
+            correlation_group_id="GRP-1",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Compliant 1",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=15),
+            resolve_deadline=t0 + timedelta(hours=1),
+            acknowledged_at=t0 + timedelta(minutes=5),
+            acknowledged_by="op1",
+            resolved_at=t0 + timedelta(minutes=30),
+            resolved_by="op1",
+        )
+        inc_comp2 = Incident(
+            incident_id="INC-C2",
+            correlation_group_id="GRP-2",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.MAJOR,
+            priority=IncidentPriority.P2,
+            title="Compliant 2",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=30),
+            resolve_deadline=t0 + timedelta(hours=4),
+            acknowledged_at=t0 + timedelta(minutes=10),
+            acknowledged_by="op2",
+            resolved_at=t0 + timedelta(minutes=50),
+            resolved_by="op2",
+        )
+        inc_dual_breach = Incident(
+            incident_id="INC-B1",
+            correlation_group_id="GRP-3",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Dual Breach",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=15),
+            resolve_deadline=t0 + timedelta(hours=1),
+            acknowledged_at=t0 + timedelta(minutes=25),
+            acknowledged_by="op3",
+            resolved_at=t0 + timedelta(minutes=80),
+            resolved_by="op3",
+        )
+        report = calc.compute_metrics([inc_comp1, inc_comp2, inc_dual_breach], as_of=t0 + timedelta(hours=2))
+        assert report.total_incidents == 3
+        assert report.total_incidents_evaluated == 3
+        assert report.compliant_incident_count == 2
+        assert report.breached_incident_count == 1
+        assert report.ack_sla_breached_count == 1
+        assert report.resolve_sla_breached_count == 1
+        assert report.sla_compliance_pct == 66.67
+
+    def test_sla_compliance_unobligated_open_incidents_excluded_from_denominator(self) -> None:
+        t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        calc = MetricsCalculator()
+        inc_fresh = Incident(
+            incident_id="INC-FRESH",
+            correlation_group_id="GRP-1",
+            status=IncidentStatus.OPEN,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Fresh",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0,
+            ack_deadline=t0 + timedelta(minutes=15),
+            resolve_deadline=t0 + timedelta(hours=1),
+        )
+        report1 = calc.compute_metrics([inc_fresh], as_of=t0 + timedelta(minutes=2))
+        assert report1.total_incidents == 1
+        assert report1.total_incidents_evaluated == 0
+        assert report1.compliant_incident_count == 0
+        assert report1.breached_incident_count == 0
+        assert report1.sla_compliance_pct is None
+
+        inc_comp = Incident(
+            incident_id="INC-COMP",
+            correlation_group_id="GRP-2",
+            status=IncidentStatus.RESOLVED,
+            severity=IncidentSeverity.CRITICAL,
+            priority=IncidentPriority.P1,
+            title="Compliant",
+            description="",
+            alarm_ids=(),
+            affected_node_ids=(),
+            suspected_cause_type=None,
+            suspected_target_id=None,
+            suspected_target_type=None,
+            rca_confidence_score=None,
+            rca_hypotheses=(),
+            rca_evidence=(),
+            created_at=t0 - timedelta(hours=2),
+            ack_deadline=t0 - timedelta(hours=2) + timedelta(minutes=15),
+            resolve_deadline=t0 - timedelta(hours=2) + timedelta(hours=1),
+            acknowledged_at=t0 - timedelta(hours=2) + timedelta(minutes=5),
+            acknowledged_by="op1",
+            resolved_at=t0 - timedelta(hours=2) + timedelta(minutes=30),
+            resolved_by="op1",
+        )
+        report2 = calc.compute_metrics([inc_fresh, inc_comp], as_of=t0 + timedelta(minutes=2))
+        assert report2.total_incidents == 2
+        assert report2.total_incidents_evaluated == 1
+        assert report2.compliant_incident_count == 1
+        assert report2.breached_incident_count == 0
+        assert report2.sla_compliance_pct == 100.0
 
 
 # ===========================================================================
