@@ -27,6 +27,10 @@ vi.mock('@/api/client', () => {
       getAlarms: vi.fn(),
       getAlarmById: vi.fn(),
       getDetectionRules: vi.fn(),
+      getFaultScenarios: vi.fn(),
+      getActiveFaultScenario: vi.fn(),
+      activateFaultScenario: vi.fn(),
+      deactivateFaultScenario: vi.fn(),
     },
   };
 });
@@ -82,6 +86,42 @@ describe('Milestone 7 End-to-End Scenarios', () => {
         },
       ],
       total: 4,
+    });
+    vi.mocked(apiClient.getFaultScenarios).mockResolvedValue({ items: [], total: 0, active_scenario_id: null });
+    vi.mocked(apiClient.getActiveFaultScenario).mockResolvedValue({
+      active: false,
+      scenario_id: null,
+      scenario_key: null,
+      name: null,
+      description: null,
+      faults: [],
+      activated_at: null,
+    });
+    vi.mocked(apiClient.activateFaultScenario).mockResolvedValue({
+      success: true,
+      message: 'Activated',
+      active_scenario: {
+        active: true,
+        scenario_id: 'scen-1',
+        scenario_key: 'cell_outage',
+        name: 'Cell Outage',
+        description: '',
+        faults: [],
+        activated_at: '2026-11-01T12:00:00Z',
+      },
+    });
+    vi.mocked(apiClient.deactivateFaultScenario).mockResolvedValue({
+      success: true,
+      message: 'Deactivated',
+      active_scenario: {
+        active: false,
+        scenario_id: null,
+        scenario_key: null,
+        name: null,
+        description: null,
+        faults: [],
+        activated_at: null,
+      },
     });
   });
 

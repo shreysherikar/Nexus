@@ -23,6 +23,7 @@ import { SeverityBadge } from '@/components/common/SeverityBadge';
 import { OperationalStatus, StatusBadge } from '@/components/common/StatusBadge';
 import { ErrorState } from '@/components/common/ErrorState';
 import { BarChartDistribution } from '@/components/common/BarChartDistribution';
+import { FaultInjectionPanel } from '@/components/common/FaultInjectionPanel';
 import { apiClient } from '@/api/client';
 import {
   AlarmResponse,
@@ -374,6 +375,11 @@ export const OverviewPage: React.FC = () => {
           />
         </div>
       )}
+
+      {/* Fault Injection & Scenario Simulation Panel */}
+      <div className="mb-6">
+        <FaultInjectionPanel onSimulationStepTriggered={fetchOverviewData} />
+      </div>
 
       {/* Primary KPI Cards Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

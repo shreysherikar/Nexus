@@ -12,6 +12,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { MetricCard } from '@/components/common/MetricCard';
 import { ErrorState } from '@/components/common/ErrorState';
 import { SimpleLineChart } from '@/components/common/SimpleLineChart';
+import { FaultInjectionPanel } from '@/components/common/FaultInjectionPanel';
 import { apiClient } from '@/api/client';
 import {
   DetectionRuleResponse,
@@ -126,13 +127,49 @@ export const KpisPage: React.FC = () => {
     }
   };
 
-  // Re-fetch on live WebSocket telemetry events
-  useWebSocketSubscription(WsEventType.TELEMETRY_SNAPSHOT, () => {
-    apiClient.getTelemetry({ limit: 500 }).then((res) => {
-      setSnapshots(res.items);
-      setTotalSnapshots(res.total);
-    }).catch(() => {});
-  });
+  // Debounced telemetry re-fetch for WebSocket bursts (e.g. 27 snapshots per simulation cycle)
+  const refreshTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const debouncedRefreshTelemetry = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = setTimeout(() => {
+      apiClient
+        .getTelemetry({ limit: 500 })
+        .then((res) => {
+          setSnapshots(res.items);
+          setTotalSnapshots(res.total);
+        })
+        .catch(() => {});
+    }, 150);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Re-fetch on live WebSocket telemetry and fault events
+  useWebSocketSubscription(WsEventType.TELEMETRY_SNAPSHOT, debouncedRefreshTelemetry);
+  useWebSocketSubscription(WsEventType.FAULT_STATUS_CHANGED, debouncedRefreshTelemetry);
+
+  // Auto-refresh when window or browser tab regains focus
+  useEffect(() => {
+    const onFocus = () => {
+      fetchTelemetry();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [fetchTelemetry]);
+
+  // When selectedNodeId changes, also ensure fresh telemetry is fetched
+  useEffect(() => {
+    debouncedRefreshTelemetry();
+  }, [selectedNodeId, debouncedRefreshTelemetry]);
 
   // Filter available nodes by selected type
   const availableNodes = useMemo(() => {
@@ -244,6 +281,11 @@ export const KpisPage: React.FC = () => {
           <ErrorState title="Telemetry Error" message={error} onRetry={fetchTelemetry} />
         </div>
       )}
+
+      {/* Fault Injection & Chaos Testing Panel */}
+      <div className="mb-6">
+        <FaultInjectionPanel onSimulationStepTriggered={fetchTelemetry} />
+      </div>
 
       {/* Node & Metric Filter Bar */}
       <div className="bg-noc-surface border border-noc-border rounded-lg p-4 mb-6 flex flex-wrap items-center justify-between gap-4">

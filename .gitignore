@@ -89,3 +89,9 @@ Thumbs.db
 *.tmp
 *.bak
 scratch/
+
+# Archives and verification bundles
+*.zip
+*.tar.gz
+*.tgz
+nexus_milestone*.zip

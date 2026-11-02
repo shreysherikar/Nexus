@@ -18,6 +18,7 @@ EXCLUDE_PATTERNS = [
     r"[\\/]__pycache__([\\/]|$)",
     r"\.pyc$",
     r"nexus_milestone.*\.zip$",
+    r"(^|[\\/])\.env$",
 ]
 
 def should_exclude(rel_path):
@@ -64,6 +65,9 @@ with zipfile.ZipFile(PARENT_ZIP, 'r') as zf:
     
     # Check required new and modified files
     required_files = [
+        "src/nexus/main.py",
+        "tests/test_main_integration.py",
+        "frontend/src/main.tsx",
         "frontend/src/pages/KpisPage.tsx",
         "frontend/src/utils/kpiEvaluator.ts",
         "frontend/tests/kpis_accuracy.test.tsx",
@@ -79,6 +83,12 @@ with zipfile.ZipFile(PARENT_ZIP, 'r') as zf:
     for rf in required_files:
         assert rf in namelist, f"Missing required file in ZIP: {rf}"
         print(f"[PASS] Found {rf}")
+
+    # Inspect src/nexus/main.py
+    main_code = zf.read("src/nexus/main.py").decode('utf-8')
+    assert "transparent_1px_png" not in main_code, "Found forbidden fake transparent PNG in main.py"
+    assert "service_worker_unregistration" in main_code or "/sw.js" in main_code, "Missing /sw.js cleanup in main.py"
+    print("[PASS] Verified src/nexus/main.py contains authentic routes and no fake PNG fallbacks.")
 
     # Inspect frontend/src/pages/KpisPage.tsx
     kpis_code = zf.read("frontend/src/pages/KpisPage.tsx").decode('utf-8')

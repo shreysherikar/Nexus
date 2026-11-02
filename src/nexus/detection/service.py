@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from nexus.detection.alarm_manager import AlarmKey, AlarmManager
+from nexus.detection.engine import AnomalyDetectionEngine, DetectionBatchResult
 from nexus.detection.models import (
     Alarm,
     AlarmStatus,
@@ -14,6 +15,8 @@ from nexus.detection.models import (
 )
 from nexus.detection.rules import ThresholdRule
 from nexus.detection.threshold_detector import ThresholdDetector
+from nexus.telemetry.models import KPISnapshot
+from nexus.topology.enums import NodeType
 
 EventPublisher = Callable[[str, dict[str, Any]], None]
 
@@ -31,6 +34,12 @@ class AlarmService:
         self._event_publisher = event_publisher
         self._threshold_detector = (
             threshold_detector if threshold_detector is not None else ThresholdDetector()
+        )
+        self._detection_engine = AnomalyDetectionEngine(
+            threshold_detector=self._threshold_detector,
+            alarm_manager=self._manager,
+            enable_threshold=True,
+            enable_statistical=True,
         )
 
     @property
@@ -107,6 +116,60 @@ class AlarmService:
                 },
             )
         return cleared
+
+    def process_snapshots(
+        self,
+        snapshots: Sequence[KPISnapshot],
+        node_types: Optional[Mapping[str, Optional[NodeType]]] = None,
+    ) -> DetectionBatchResult:
+        """Evaluate a batch of snapshots against threshold and statistical detectors,
+        updating AlarmManager and publishing live WebSocket events for new/updated/cleared alarms.
+        """
+        batch_result = self._detection_engine.process_batch(snapshots, node_types=node_types)
+        for alarm in batch_result.new_alarms:
+            self._publish(
+                "ALARM_CREATED",
+                {
+                    "alarm_id": alarm.alarm_id,
+                    "node_id": alarm.node_id,
+                    "rule_id": alarm.rule_id,
+                    "metric_name": alarm.metric_name,
+                    "severity": alarm.severity.value,
+                    "current_value": alarm.current_value,
+                    "threshold": alarm.threshold,
+                    "status": alarm.status.value,
+                    "first_seen": alarm.first_seen.isoformat(),
+                },
+            )
+        for alarm in batch_result.updated_alarms:
+            self._publish(
+                "ALARM_UPDATED",
+                {
+                    "alarm_id": alarm.alarm_id,
+                    "node_id": alarm.node_id,
+                    "rule_id": alarm.rule_id,
+                    "metric_name": alarm.metric_name,
+                    "severity": alarm.severity.value,
+                    "current_value": alarm.current_value,
+                    "threshold": alarm.threshold,
+                    "status": alarm.status.value,
+                    "observation_count": alarm.observation_count,
+                    "last_seen": alarm.last_seen.isoformat(),
+                },
+            )
+        for alarm in batch_result.cleared_alarms:
+            self._publish(
+                "ALARM_CLEARED",
+                {
+                    "alarm_id": alarm.alarm_id,
+                    "node_id": alarm.node_id,
+                    "rule_id": alarm.rule_id,
+                    "metric_name": alarm.metric_name,
+                    "cleared_at": alarm.cleared_at.isoformat() if alarm.cleared_at else None,
+                    "status": alarm.status.value,
+                },
+            )
+        return batch_result
 
     def get_alarms(
         self,

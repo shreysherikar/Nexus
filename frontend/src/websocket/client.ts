@@ -16,6 +16,40 @@ import { WsConnectionStatus, WsEventListener, WsEventEnvelope, WsOptions } from 
 
 export type StatusListener = (status: WsConnectionStatus) => void;
 
+/**
+ * Normalizes and resolves WebSocket URLs for native browser and proxy compatibility.
+ * Safely resolves relative paths (e.g. /ws/live) to the active browser origin host
+ * with proper ws:// or wss:// protocols to leverage Vite dev proxy or production reverse proxy.
+ */
+export function resolveWsUrl(rawUrl?: string): string {
+  if (!rawUrl || rawUrl.trim() === '') {
+    if (typeof window !== 'undefined' && window.location?.host) {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${window.location.host}/ws/live`;
+    }
+    return '';
+  }
+
+  if (rawUrl.startsWith('ws://') || rawUrl.startsWith('wss://')) {
+    return rawUrl;
+  }
+
+  if (rawUrl.startsWith('http://')) {
+    return rawUrl.replace(/^http:\/\//, 'ws://');
+  }
+
+  if (rawUrl.startsWith('https://')) {
+    return rawUrl.replace(/^https:\/\//, 'wss://');
+  }
+
+  if (rawUrl.startsWith('/') && typeof window !== 'undefined' && window.location?.host) {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${rawUrl}`;
+  }
+
+  return rawUrl;
+}
+
 export class NexusWebSocketClient {
   private url: string;
   private ws: WebSocket | null = null;
@@ -34,14 +68,10 @@ export class NexusWebSocketClient {
   private statusListeners: Set<StatusListener> = new Set();
 
   constructor(options: WsOptions = {}) {
-    const defaultWsUrl =
-      typeof window !== 'undefined' && window.location.host
-        ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/live`
-        : '';
     const envWsUrl =
-      (typeof import.meta !== 'undefined' && import.meta.env?.VITE_WS_URL) ||
-      defaultWsUrl;
-    this.url = options.url || envWsUrl;
+      (typeof import.meta !== 'undefined' && import.meta.env?.VITE_WS_URL) || '';
+    const rawUrl = options.url !== undefined ? options.url : envWsUrl;
+    this.url = rawUrl === '' ? '' : resolveWsUrl(rawUrl);
     this.reconnectInterval = options.reconnectInterval ?? 1000;
     this.maxReconnectInterval = options.maxReconnectInterval ?? 30000;
     this.reconnectDecay = options.reconnectDecay ?? 1.5;
@@ -62,8 +92,9 @@ export class NexusWebSocketClient {
   }
 
   public setUrl(newUrl: string): void {
-    if (this.url !== newUrl) {
-      this.url = newUrl;
+    const resolved = newUrl === '' ? '' : resolveWsUrl(newUrl);
+    if (this.url !== resolved) {
+      this.url = resolved;
       if (this.status === 'CONNECTED' || this.status === 'CONNECTING' || this.status === 'RECONNECTING') {
         this.disconnect();
         this.connect();

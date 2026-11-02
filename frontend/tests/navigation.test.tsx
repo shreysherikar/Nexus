@@ -71,6 +71,42 @@ vi.mock('@/api/client', () => {
         timestamp: '2026-11-01T14:00:00Z',
         message: 'Step complete',
       }),
+      getFaultScenarios: vi.fn().mockResolvedValue({ items: [], total: 0, active_scenario_id: null }),
+      getActiveFaultScenario: vi.fn().mockResolvedValue({
+        active: false,
+        scenario_id: null,
+        scenario_key: null,
+        name: null,
+        description: null,
+        faults: [],
+        activated_at: null,
+      }),
+      activateFaultScenario: vi.fn().mockResolvedValue({
+        success: true,
+        message: 'Activated',
+        active_scenario: {
+          active: true,
+          scenario_id: 'scen-1',
+          scenario_key: 'cell_outage',
+          name: 'Cell Outage',
+          description: '',
+          faults: [],
+          activated_at: '2026-11-01T12:00:00Z',
+        },
+      }),
+      deactivateFaultScenario: vi.fn().mockResolvedValue({
+        success: true,
+        message: 'Deactivated',
+        active_scenario: {
+          active: false,
+          scenario_id: null,
+          scenario_key: null,
+          name: null,
+          description: null,
+          faults: [],
+          activated_at: null,
+        },
+      }),
     },
   };
 });

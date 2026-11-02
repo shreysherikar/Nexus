@@ -261,3 +261,49 @@ export interface DetectionRuleListResponse {
   items: DetectionRuleResponse[];
   total: number;
 }
+
+// Fault Injection & Scenario contracts
+export interface FaultInfo {
+  fault_id: string;
+  fault_type: string;
+  target_id: string;
+  severity: number;
+  start_time: string;
+  end_time: string;
+  affected_nodes: string[];
+  description: string | null;
+}
+
+export interface FaultScenarioInfo {
+  id: string;
+  scenario_id: string;
+  name: string;
+  description: string;
+  fault_type: string;
+  target_id: string;
+  severity: number;
+  affected_nodes: string[];
+  is_active: boolean;
+}
+
+export interface FaultScenarioListResponse {
+  items: FaultScenarioInfo[];
+  total: number;
+  active_scenario_id: string | null;
+}
+
+export interface ActiveScenarioResponse {
+  active: boolean;
+  scenario_id: string | null;
+  scenario_key: string | null;
+  name: string | null;
+  description: string | null;
+  faults: FaultInfo[];
+  activated_at: string | null;
+}
+
+export interface ScenarioActionResponse {
+  success: boolean;
+  message: string;
+  active_scenario: ActiveScenarioResponse;
+}

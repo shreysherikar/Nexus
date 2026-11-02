@@ -10,6 +10,8 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { ErrorState } from '@/components/common/ErrorState';
 import { SimpleLineChart } from '@/components/common/SimpleLineChart';
 import { BarChartDistribution } from '@/components/common/BarChartDistribution';
+import { FaultInjectionPanel } from '@/components/common/FaultInjectionPanel';
+import { apiClient } from '@/api/client';
 
 describe('Design System Components', () => {
   it('renders StatusBadge with accessible text label and correct styling', () => {
@@ -163,5 +165,54 @@ describe('Design System Components', () => {
     expect(screen.getByText('(30%)')).toBeInTheDocument();
     expect(screen.getByText('Major')).toBeInTheDocument();
     expect(screen.getByText('(70%)')).toBeInTheDocument();
+  });
+
+  it('renders FaultInjectionPanel with reference scenarios and active state controls', async () => {
+    vi.spyOn(apiClient, 'getFaultScenarios').mockResolvedValue({
+      total: 2,
+      active_scenario_id: null,
+      items: [
+        {
+          id: 'radio_interference',
+          scenario_id: 'SCENARIO-INTERFERENCE-01',
+          name: 'Radio RF Interference',
+          description: 'Severe external RF interference on CELL-05',
+          fault_type: 'RADIO_INTERFERENCE',
+          target_id: 'CELL-05',
+          severity: 0.8,
+          affected_nodes: ['CELL-05'],
+          is_active: false,
+        },
+        {
+          id: 'cell_outage',
+          scenario_id: 'SCENARIO-CELL-OUTAGE-01',
+          name: 'Single Cell Outage',
+          description: 'Single radio sector failure on CELL-01',
+          fault_type: 'CELL_OUTAGE',
+          target_id: 'CELL-01',
+          severity: 1.0,
+          affected_nodes: ['CELL-01'],
+          is_active: false,
+        },
+      ],
+    });
+
+    vi.spyOn(apiClient, 'getActiveFaultScenario').mockResolvedValue({
+      active: false,
+      scenario_id: null,
+      scenario_key: null,
+      name: null,
+      description: null,
+      faults: [],
+      activated_at: null,
+    });
+
+    render(<FaultInjectionPanel />);
+
+    expect(await screen.findByText('Fault Injection & Controlled Simulation')).toBeInTheDocument();
+    expect(screen.getByText(/NETWORK NOMINAL/)).toBeInTheDocument();
+    expect(screen.getByText('Radio RF Interference')).toBeInTheDocument();
+    expect(screen.getByText('Single Cell Outage')).toBeInTheDocument();
+    expect(screen.getByText('Trigger Simulation Step')).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { NexusWebSocketClient } from '@/websocket/client';
+import { NexusWebSocketClient, resolveWsUrl } from '@/websocket/client';
 import { WsConnectionStatus } from '@/types/websocket';
 
 // Mock WebSocket class
@@ -76,6 +76,23 @@ describe('NexusWebSocketClient', () => {
   it('initializes in DISCONNECTED state if url is empty or autoConnect is false', () => {
     client = new NexusWebSocketClient({ url: '', autoConnect: false });
     expect(client.getStatus()).toBe('DISCONNECTED');
+  });
+
+  it('resolves relative /ws/live and converts http/https protocols safely', () => {
+    // 1. Relative path resolution
+    const resolvedRelative = resolveWsUrl('/ws/live');
+    expect(resolvedRelative).toMatch(/^wss?:\/\/.*\/ws\/live$/);
+
+    // 2. HTTP to WS conversion
+    expect(resolveWsUrl('http://127.0.0.1:8000/ws/live')).toBe('ws://127.0.0.1:8000/ws/live');
+    expect(resolveWsUrl('https://127.0.0.1:8000/ws/live')).toBe('wss://127.0.0.1:8000/ws/live');
+
+    // 3. Absolute WebSocket URL preserved
+    expect(resolveWsUrl('ws://127.0.0.1:8000/ws/live')).toBe('ws://127.0.0.1:8000/ws/live');
+
+    // 4. Client constructed with relative path resolves to full WebSocket protocol
+    const relClient = new NexusWebSocketClient({ url: '/ws/live', autoConnect: false });
+    expect(relClient.getUrl()).toMatch(/^wss?:\/\/.*\/ws\/live$/);
   });
 
   it('transitions to CONNECTING then CONNECTED on successful connection', () => {

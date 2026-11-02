@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nexus.incidents.api import app, create_app, router
+from nexus.incidents.api import router
 from nexus.incidents.enums import (
     ActorType,
     IncidentPriority,
@@ -69,3 +69,11 @@ __all__ = [
     "create_app",
     "router",
 ]
+
+
+def __getattr__(name: str):
+    if name in ("app", "create_app"):
+        import nexus.main as _main
+
+        return getattr(_main, name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

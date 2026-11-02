@@ -36,11 +36,14 @@ import {
   IncidentMetricsResponse,
   IncidentResponse,
   ResolveRequest,
+  ScenarioActionResponse,
   TelemetryGenerateStepResponse,
   TelemetryListResponse,
   TimelineEventResponse,
   TopologyNodeResponse,
   TopologyResponse,
+  ActiveScenarioResponse,
+  FaultScenarioListResponse,
 } from '@/types/api';
 
 export class ApiError extends Error {
@@ -102,11 +105,14 @@ export class NexusApiClient {
 
     try {
       const response = await fetch(url, {
+        cache: 'no-store',
         ...restOptions,
         signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          'Cache-Control': 'no-cache, no-store',
+          Pragma: 'no-cache',
           ...headers,
         },
       });
@@ -317,6 +323,44 @@ export class NexusApiClient {
   public async getDetectionRules(signal?: AbortSignal): Promise<DetectionRuleListResponse> {
     return this.request<DetectionRuleListResponse>('/api/v1/detection/rules', {
       method: 'GET',
+      signal,
+    });
+  }
+
+  // Fault Injection & Scenario endpoints
+  public async getFaultScenarios(signal?: AbortSignal): Promise<FaultScenarioListResponse> {
+    return this.request<FaultScenarioListResponse>('/api/v1/faults/scenarios', {
+      method: 'GET',
+      signal,
+    });
+  }
+
+  public async getActiveFaultScenario(signal?: AbortSignal): Promise<ActiveScenarioResponse> {
+    return this.request<ActiveScenarioResponse>('/api/v1/faults/active', {
+      method: 'GET',
+      signal,
+    });
+  }
+
+  public async activateFaultScenario(
+    scenarioId: string,
+    options?: { immediate?: boolean; base_time?: string },
+    signal?: AbortSignal
+  ): Promise<ScenarioActionResponse> {
+    return this.request<ScenarioActionResponse>(
+      `/api/v1/faults/scenarios/${encodeURIComponent(scenarioId)}/activate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(options || { immediate: true }),
+        signal,
+      }
+    );
+  }
+
+  public async deactivateFaultScenario(signal?: AbortSignal): Promise<ScenarioActionResponse> {
+    return this.request<ScenarioActionResponse>('/api/v1/faults/scenarios/deactivate', {
+      method: 'POST',
       signal,
     });
   }

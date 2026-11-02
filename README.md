@@ -105,8 +105,13 @@ The following capabilities are planned for upcoming milestones and are not yet i
 
 ## Local Setup & Quickstart
 
+### Prerequisites
+- **Python**: Version 3.11 or higher
+- **Node.js**: Version 18 or higher with `npm`
+- **Database (Optional)**: Docker Desktop / Docker Compose for PostgreSQL 15+ (SQLite fallback is automatically supported for lightweight local development)
+
 ### 1. Install Dependencies
-Clone the repository and install the project in editable mode with all dependencies:
+Clone the repository and install the project in editable mode with all dependencies (including FastAPI, Uvicorn, SQLAlchemy, and test harnesses):
 
 ```bash
 git clone https://github.com/shreysherikar/Nexus.git
@@ -122,11 +127,13 @@ Copy the example environment configuration:
 cp .env.example .env
 ```
 
-Start the local PostgreSQL instance via Docker Compose (optional; SQLite fallback is available for offline testing):
+If using PostgreSQL, start the local PostgreSQL instance via Docker Compose:
 
 ```bash
 docker compose up -d
 ```
+
+*(Note: For offline or standalone development without Docker, setting `ENVIRONMENT=development` in your environment automatically initializes SQLite tables without external dependencies).*
 
 ### 3. Apply Database Migrations
 Apply Alembic migrations to set up the incident management and timeline schema:
@@ -136,13 +143,16 @@ python -m alembic upgrade head
 ```
 
 ### 4. Start the REST API
-Launch the FastAPI development server:
+Launch the central FastAPI development server via Uvicorn:
 
 ```bash
-uvicorn nexus.incidents.api:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn nexus.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The interactive OpenAPI documentation will be accessible at `http://localhost:8000/docs`.
+- Interactive OpenAPI documentation: `http://localhost:8000/docs`
+- Health liveness probe: `http://localhost:8000/health`
+- Subsystem readiness probe: `http://localhost:8000/ready`
+- Live WebSocket event stream: `ws://localhost:8000/ws/live`
 
 ### 5. Launch the Frontend NOC Dashboard
 Install frontend dependencies and start the Vite development server:
@@ -153,7 +163,7 @@ npm install
 npm run dev
 ```
 
-The dashboard will be accessible at `http://localhost:3000`.
+The NOC dashboard will be accessible at `http://localhost:3000`.
 
 ---
 

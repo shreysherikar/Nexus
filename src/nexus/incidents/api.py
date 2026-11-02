@@ -519,95 +519,15 @@ def get_timeline(
 
 
 def create_app() -> FastAPI:
-    """FastAPI application factory."""
+    """FastAPI application factory for backwards compatibility with existing tests."""
+    from nexus.main import create_app as _create_main_app
 
-    @asynccontextmanager
-    async def lifespan(app_instance: FastAPI):
-        # Register exactly one listener for each running application instance
-        broadcaster = get_broadcaster()
-        topo = get_topology_registry()
-
-        def on_topology_status_change(
-            node_id: str, old_status: NodeStatus, new_status: NodeStatus, ts: datetime
-        ) -> None:
-            broadcaster.publish(
-                "TOPOLOGY_STATUS_CHANGED",
-                {
-                    "node_id": node_id,
-                    "previous_status": old_status.value,
-                    "new_status": new_status.value,
-                    "timestamp": ts.isoformat(),
-                },
-                timestamp=ts,
-            )
-
-        topo.add_status_listener(on_topology_status_change)
-        try:
-            yield
-        finally:
-            # Deterministically remove callback on shutdown
-            topo.remove_status_listener(on_topology_status_change)
-
-    app = FastAPI(
-        title="NEXUS Incident Management API",
-        version="1.0.0",
-        description="Operational incident management, lifecycle tracking, and SLA reporting API.",
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
-        lifespan=lifespan,
-    )
-
-    @app.exception_handler(IncidentNotFoundError)
-    async def not_found_handler(request: Any, exc: IncidentNotFoundError) -> JSONResponse:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": str(exc), "error_code": "INCIDENT_NOT_FOUND"},
-        )
-
-    @app.exception_handler(DuplicateIncidentError)
-    async def duplicate_handler(request: Any, exc: DuplicateIncidentError) -> JSONResponse:
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content={"detail": str(exc), "error_code": "DUPLICATE_INCIDENT"},
-        )
-
-    @app.exception_handler(InvalidStateTransitionError)
-    async def invalid_transition_handler(
-        request: Any, exc: InvalidStateTransitionError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"detail": str(exc), "error_code": "INVALID_STATE_TRANSITION"},
-        )
-
-    @app.exception_handler(InvalidIncidentDataError)
-    async def invalid_data_handler(
-        request: Any, exc: InvalidIncidentDataError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={"detail": str(exc), "error_code": "INVALID_INCIDENT_DATA"},
-        )
-
-    @app.get("/health", tags=["health"])
-    async def health_check() -> dict[str, str]:
-        return {"status": "healthy"}
-
-    # Wire authentic event publishers to live broadcaster
-    broadcaster = get_broadcaster()
-    topo = get_topology_registry()
-    get_telemetry_store().set_event_publisher(broadcaster.publish)
-    get_telemetry_store().set_topology(topo)
-    get_alarm_service().set_event_publisher(broadcaster.publish)
-    get_telemetry_pipeline()  # Initialize pipeline
-
-    app.include_router(router)
-    app.include_router(topology_router)
-    app.include_router(telemetry_router)
-    app.include_router(alarm_router)
-    app.include_router(websocket_router)
-    return app
+    return _create_main_app()
 
 
-app = create_app()
+def __getattr__(name: str) -> Any:
+    if name == "app":
+        from nexus.main import app as _main_app
+
+        return _main_app
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
