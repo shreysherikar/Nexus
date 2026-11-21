@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 import os
+import time
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -40,6 +41,7 @@ from nexus.incidents.exceptions import (
     InvalidIncidentDataError,
     InvalidStateTransitionError,
 )
+from nexus.metrics import get_metrics_manager, normalize_endpoint
 from nexus.telemetry.api import router as telemetry_router
 from nexus.telemetry.orchestrator import get_telemetry_pipeline
 from nexus.telemetry.store import get_telemetry_store
@@ -147,6 +149,29 @@ def create_app() -> FastAPI:
             response.headers["Expires"] = "0"
         return response
 
+    @app.middleware("http")
+    async def track_prometheus_http_metrics(request: Request, call_next):
+        """Track HTTP request count and latency histograms using normalized route templates."""
+        # Exclude /metrics endpoint to prevent self-distortion from scrape polling
+        if request.url.path == "/metrics":
+            return await call_next(request)
+
+        start_time = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            duration = time.perf_counter() - start_time
+            endpoint = normalize_endpoint(request)
+            get_metrics_manager().record_http_request(
+                method=request.method,
+                endpoint=endpoint,
+                status_code=status_code,
+                duration_seconds=duration,
+            )
+
     # Domain Exception Handlers
     @app.exception_handler(IncidentNotFoundError)
     async def incident_not_found_handler(request: Any, exc: IncidentNotFoundError) -> JSONResponse:
@@ -196,7 +221,13 @@ def create_app() -> FastAPI:
             "docs_url": "/docs",
             "health_url": "/health",
             "readiness_url": "/ready",
+            "metrics_url": "/metrics",
         }
+
+    @app.get("/metrics", tags=["system"], summary="Prometheus Metrics Exposition")
+    async def prometheus_metrics() -> Response:
+        """Expose Prometheus-compatible operational metrics across all platform subsystems."""
+        return get_metrics_manager().generate_metrics_response()
 
     @app.get("/health", tags=["system"], summary="Service Liveness Probe")
     async def health_check() -> dict[str, str]:

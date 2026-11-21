@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  scrape_timeout: 5s
+
+scrape_configs:
+  # Self-monitoring job for Prometheus instance
+  - job_name: "prometheus"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Primary scraper job targeting NEXUS FastAPI backend metrics engine
+  - job_name: "nexus-backend"
+    metrics_path: "/metrics"
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    static_configs:
+      - targets: ["backend:8000"]
