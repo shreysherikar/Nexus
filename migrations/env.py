@@ -52,7 +52,23 @@ def get_url() -> str:
 
     config_url = context.config.get_main_option("sqlalchemy.url")
     env_url = os.getenv("DATABASE_URL") or os.getenv("NEXUS_DATABASE_URL")
-    default_pg_url = "postgresql+psycopg://nexus:nexus@localhost:5432/nexus_db"
+    if not env_url and os.getenv("POSTGRES_PASSWORD"):
+        from sqlalchemy.engine import URL
+
+        user = os.getenv("POSTGRES_USER", "nexus_user")
+        pwd = os.getenv("POSTGRES_PASSWORD")
+        host = os.getenv("POSTGRES_HOST", "postgres")
+        port_str = os.getenv("POSTGRES_PORT", "5432")
+        port = int(port_str) if port_str.isdigit() else 5432
+        db = os.getenv("POSTGRES_DB", "nexus_db")
+        env_url = URL.create(
+            "postgresql+psycopg",
+            username=user,
+            password=pwd,
+            host=host,
+            port=port,
+            database=db,
+        ).render_as_string(hide_password=False)
 
     def _normalize_driver(raw_url: str) -> str:
         if raw_url.startswith("postgresql://"):
@@ -66,20 +82,16 @@ def get_url() -> str:
             return _normalize_driver(env_url.strip())
         if config_url and config_url.strip():
             return _normalize_driver(config_url.strip())
-        return default_pg_url
+        raise RuntimeError("No database URL configured for migrations. Set DATABASE_URL or POSTGRES_PASSWORD.")
 
     # 3. Programmatic execution: respect supplied Config option
     if config_url and config_url.strip():
-        # If config_url is the generic default and DATABASE_URL is set, use DATABASE_URL;
-        # if config_url was explicitly set or differs from default, respect config_url.
-        if config_url.strip() == default_pg_url and env_url and env_url.strip():
-            return _normalize_driver(env_url.strip())
         return _normalize_driver(config_url.strip())
 
-    # 4. Fallback to env_url or default
+    # 4. Fallback to env_url
     if env_url and env_url.strip():
         return _normalize_driver(env_url.strip())
-    return default_pg_url
+    raise RuntimeError("No database URL configured for migrations. Set DATABASE_URL or POSTGRES_PASSWORD.")
 
 
 def run_migrations_offline() -> None:

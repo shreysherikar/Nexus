@@ -142,9 +142,30 @@ def get_incident_service() -> IncidentService:
     """Dependency provider returning an IncidentService instance."""
     global _default_service
     if _default_service is None:
-        db_url = os.getenv("DATABASE_URL") or os.getenv(
-            "NEXUS_DATABASE_URL", "sqlite:///./nexus_incidents.db"
-        )
+        db_url = os.getenv("DATABASE_URL") or os.getenv("NEXUS_DATABASE_URL")
+        if not db_url and os.getenv("POSTGRES_PASSWORD"):
+            from sqlalchemy.engine import URL
+
+            pg_user = os.getenv("POSTGRES_USER", "nexus_user")
+            pg_pwd = os.getenv("POSTGRES_PASSWORD")
+            pg_host = os.getenv("POSTGRES_HOST", "postgres")
+            pg_port_str = os.getenv("POSTGRES_PORT", "5432")
+            pg_port = int(pg_port_str) if pg_port_str.isdigit() else 5432
+            pg_db = os.getenv("POSTGRES_DB", "nexus_db")
+            db_url = URL.create(
+                "postgresql+psycopg",
+                username=pg_user,
+                password=pg_pwd,
+                host=pg_host,
+                port=pg_port,
+                database=pg_db,
+            ).render_as_string(hide_password=False)
+        elif not db_url:
+            db_url = "sqlite:///./nexus_incidents.db"
+
+        if db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
         engine = create_engine(db_url)
         if engine.dialect.name == "sqlite":
             # Explicitly restrict SQLite schema auto-creation to development configuration

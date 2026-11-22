@@ -7,5 +7,11 @@ __pycache__
 tests
 frontend
 *.db
+*.sqlite*
 *.zip
+nexus_*.zip
 .env
+.env.*
+*.env
+*.key
+*.pem

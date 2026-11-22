@@ -283,7 +283,7 @@ class TestAlembicMigration:
         self, tmp_path, monkeypatch
     ) -> None:
         """Prove SQLite migration respects Config object URL even when DATABASE_URL is set in env."""
-        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://nexus:nexus@localhost:5432/nexus_test_db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://test_user:test_secret@localhost:5432/nexus_test_db")
         db_file = tmp_path / "test_env_override.db"
         test_url = f"sqlite:///{db_file}"
 

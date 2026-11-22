@@ -19,8 +19,8 @@ RUN groupadd -g 1000 nexus && \
 
 WORKDIR /app
 
-# Install Python dependencies first for caching
-COPY --chown=nexus:nexus pyproject.toml alembic.ini ./
+# Install Python dependencies first for caching (README.md required by pyproject.toml metadata)
+COPY --chown=nexus:nexus pyproject.toml alembic.ini README.md ./
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 

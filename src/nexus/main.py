@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -245,46 +246,77 @@ def create_app() -> FastAPI:
             topo = get_topology_registry()
             node_count = len(topo) if hasattr(topo, "__len__") else len(topo.all_nodes())
             if node_count > 0:
-                components["topology"] = f"ready ({node_count} nodes)"
+                components["topology"] = "ready"
+                logger.debug("Topology readiness check passed (%d nodes registered)", node_count)
             else:
-                components["topology"] = "not_ready (empty topology)"
+                components["topology"] = "not_ready"
+                logger.warning("Topology readiness check failed: empty topology registry")
                 is_ready = False
         except Exception as exc:
-            components["topology"] = f"error: {str(exc)}"
+            logger.error(
+                "Readiness check failed for subsystem=%s error_type=%s",
+                "topology",
+                type(exc).__name__,
+            )
+            components["topology"] = "error"
             is_ready = False
 
         # 2. Event Broadcaster Check
         try:
             broadcaster = get_broadcaster()
-            components["broadcaster"] = f"ready ({broadcaster.active_connections_count} subscribers)"
+            components["broadcaster"] = "ready"
+            logger.debug("Broadcaster readiness check passed (%d active subscribers)", broadcaster.active_connections_count)
         except Exception as exc:
-            components["broadcaster"] = f"error: {str(exc)}"
+            logger.error(
+                "Readiness check failed for subsystem=%s error_type=%s",
+                "broadcaster",
+                type(exc).__name__,
+            )
+            components["broadcaster"] = "error"
             is_ready = False
 
         # 3. Telemetry Store Check
         try:
             store = get_telemetry_store()
-            components["telemetry_store"] = f"ready ({store.count} snapshots)"
+            components["telemetry_store"] = "ready"
+            logger.debug("Telemetry store readiness check passed (%d snapshots)", store.count)
         except Exception as exc:
-            components["telemetry_store"] = f"error: {str(exc)}"
+            logger.error(
+                "Readiness check failed for subsystem=%s error_type=%s",
+                "telemetry_store",
+                type(exc).__name__,
+            )
+            components["telemetry_store"] = "error"
             is_ready = False
 
         # 4. Alarm Service Check
         try:
             alarm_svc = get_alarm_service()
             rule_count = len(alarm_svc.get_rules())
-            components["alarm_service"] = f"ready ({rule_count} rules)"
+            components["alarm_service"] = "ready"
+            logger.debug("Alarm service readiness check passed (%d rules configured)", rule_count)
         except Exception as exc:
-            components["alarm_service"] = f"error: {str(exc)}"
+            logger.error(
+                "Readiness check failed for subsystem=%s error_type=%s",
+                "alarm_service",
+                type(exc).__name__,
+            )
+            components["alarm_service"] = "error"
             is_ready = False
 
         # 5. Fault Service Check
         try:
             fault_svc = get_fault_service()
             active_sc = fault_svc.get_active_scenario()
-            components["fault_service"] = f"ready (active: {active_sc.active})"
+            components["fault_service"] = "ready"
+            logger.debug("Fault service readiness check passed (scenario_active: %s)", active_sc.active)
         except Exception as exc:
-            components["fault_service"] = f"error: {str(exc)}"
+            logger.error(
+                "Readiness check failed for subsystem=%s error_type=%s",
+                "fault_service",
+                type(exc).__name__,
+            )
+            components["fault_service"] = "error"
             is_ready = False
 
         # 6. Database & Incident Service Check
@@ -297,9 +329,15 @@ def create_app() -> FastAPI:
                 components["database"] = "ready"
             else:
                 components["database"] = "not_ready"
+                logger.warning("Database readiness check failed: IncidentService unavailable")
                 is_ready = False
         except Exception as exc:
-            components["database"] = f"unhealthy: {str(exc)}"
+            logger.error(
+                "Readiness check failed for subsystem=%s error_type=%s",
+                "database",
+                type(exc).__name__,
+            )
+            components["database"] = "unhealthy"
             is_ready = False
 
         status_code = status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE

@@ -5,8 +5,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Enable corepack for pnpm support
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Enable corepack with reproducible pinned pnpm version compatible with lockfileVersion 9.0 and Node 20
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 # Copy package definitions and lockfiles
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./

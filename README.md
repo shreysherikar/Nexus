@@ -122,46 +122,62 @@ NEXUS includes a reproducible, multi-service Docker Compose environment orchestr
 ```
                           ┌──────────────────────────┐
                           │   NEXUS Web / Nginx      │
-                          │   (Port 3000)            │
+                          │   (Host: 127.0.0.1:3000) │
                           └──────┬────────────┬──────┘
                                  │            │
                  SPA / Static    │            │ Reverse Proxy:
-                 Assets          │            │ /api/, /ws/, /health,
-                                 ▼            │ /ready, /metrics
+                 Assets          │            │ /api/, /ws/,
+                                 ▼            │ /health, /ready
                           ┌─────────────┐     │
                           │ React/Vite  │     ▼
                           │ Production  │ ┌──────────────────────┐
-                          │ Build       │ │ NEXUS Backend API    │◄──────┐ Scrape
-                          └─────────────┘ │ (Port 8000)          │       │ /metrics
+                          │ Build       │ │ NEXUS Backend API    │◄──────┐ Internal Scrape
+                          └─────────────┘ │ (127.0.0.1:8000)     │       │ /metrics
                                           └──────┬───────────────┘       │
                                                  │                ┌──────┴────────┐
                                                  │ DB             │ Prometheus    │
-                                                 ▼                │ (Port 9090)   │
-                                          ┌──────────────┐        └───────────────┘
-                                          │ PostgreSQL   │
-                                          │ (Port 5432)  │
+                                                 ▼                │ (127.0.0.1:   │
+                                          ┌──────────────┐        │  9090)        │
+                                          │ PostgreSQL   │        └───────────────┘
+                                          │ (Internal)   │
                                           └──────────────┘
 ```
 
 ### Services & Endpoints
 
-| Service | Container Name | Host Port | Internal Port | Primary Endpoints / Functions | Healthcheck |
+| Service | Container Name | Host Binding | Internal Port | Primary Endpoints / Functions | Healthcheck |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Frontend** | `nexus-frontend` | `3000` | `80` | `http://localhost:3000/` (NOC Dashboard)<br>`http://localhost:3000/api/` (API proxy)<br>`http://localhost:3000/ws/live` (WebSocket proxy)<br>`http://localhost:3000/metrics` (Metrics proxy) | `wget http://127.0.0.1/health` |
-| **Backend** | `nexus-backend` | `8000` | `8000` | `http://localhost:8000/docs` (Swagger UI)<br>`http://localhost:8000/ready` (Subsystem readiness)<br>`http://localhost:8000/metrics` (Prometheus exposition)<br>`ws://localhost:8000/ws/live` (WebSocket) | `curl -f http://localhost:8000/ready` |
-| **Database** | `nexus-postgres` | Internal | `5432` | PostgreSQL 15 persistent relational store | `pg_isready -U nexus -d nexus` |
-| **Prometheus** | `nexus-prometheus`| `9090` | `9090` | `http://localhost:9090/` (Prometheus Web UI)<br>`http://localhost:9090/targets` (Active scrape targets)<br>`http://localhost:9090/-/healthy` (Health status) | Container runtime |
+| **Frontend** | `nexus-frontend` | `127.0.0.1:3000` | `80` | `http://localhost:3000/` (NOC Dashboard)<br>`http://localhost:3000/api/` (API proxy)<br>`http://localhost:3000/ws/live` (WebSocket proxy)<br>*(Note: `/metrics` is blocked from public frontend proxy)* | `wget http://127.0.0.1/health` |
+| **Backend** | `nexus-backend` | `127.0.0.1:8000` | `8000` | `http://127.0.0.1:8000/docs` (Swagger UI)<br>`http://127.0.0.1:8000/ready` (Subsystem readiness)<br>`http://127.0.0.1:8000/metrics` (Prometheus exposition)<br>`ws://127.0.0.1:8000/ws/live` (WebSocket) | `curl -f http://localhost:8000/ready` |
+| **Database** | `nexus-postgres` | Internal only | `5432` | PostgreSQL 15 persistent relational store | `pg_isready -U nexus_user -d nexus_db` |
+| **Prometheus** | `nexus-prometheus`| `127.0.0.1:9090` | `9090` | `http://127.0.0.1:9090/` (Prometheus Web UI)<br>`http://127.0.0.1:9090/targets` (Active scrape targets)<br>`http://127.0.0.1:9090/-/healthy` (Health status) | Container runtime |
 
 ### Prerequisites
 - Docker Engine 20.10+
 - Docker Compose v2+ (e.g. `docker compose` or `docker-compose`)
 
-### Starting the Stack
+### 1. Configure Environment
+Before launching Compose, create a local `.env` configuration from the provided template:
+
+```bash
+cp .env.example .env
+```
+
+Ensure `POSTGRES_PASSWORD` is configured in `.env`. Docker Compose enforces mandatory password validation and will halt startup if `POSTGRES_PASSWORD` is unset.
+
+### 2. Starting the Stack
 Build the production images and launch all four services in detached mode:
 
 ```bash
 docker compose up --build -d
 ```
+
+### Security & Hardening Configuration
+- **Host Interface Isolation**: Host port mappings for backend (`8000`), frontend (`3000`), and Prometheus (`9090`) bind to loopback (`127.0.0.1`) by default, preventing unintended exposure to public or local area networks.
+- **Prometheus UI Exposure**: In production environments where host access to Prometheus UI is unnecessary, host binding can be disabled by unsetting `PROMETHEUS_PORT` or overriding port mappings.
+- **Metrics Access Restriction**: The frontend Nginx reverse proxy explicitly denies access to `/metrics` (returns 404), ensuring operational metrics are scraped strictly within the private Docker bridge network (`nexus-network`).
+- **Privilege Escalation Prevention**: All containers enforce `security_opt: [no-new-privileges:true]`. The backend process executes as an unprivileged non-root user (`nexus`, UID 1000).
+- **Information Disclosure Safeguards**: The `/ready` probe returns clean component operational status strings without leaking internal exception details, database connection URLs, or driver stack traces.
 
 ### Service Startup Sequence & Automatic Migrations
 The deployment enforces strict dependency health checks:
