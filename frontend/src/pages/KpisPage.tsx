@@ -68,17 +68,22 @@ export const KpisPage: React.FC = () => {
   // Authoritative rules map from backend
   const rulesMap = useMemo(() => {
     const map = new Map<string, DetectionRuleResponse>();
-    rules.forEach((r) => map.set(r.rule_id, r));
+    rules.forEach((r) => {
+      map.set(r.rule_id, r);
+      if (r.metric_name) {
+        map.set(r.metric_name, r);
+      }
+    });
     return map;
   }, [rules]);
 
-  const ruleAvail = rulesMap.get('RULE-AVAIL-CRIT');
-  const ruleDrop = rulesMap.get('RULE-DROP-CRIT');
-  const ruleLat = rulesMap.get('RULE-LAT-MAJOR');
-  const rulePrb = rulesMap.get('RULE-PRB-MAJOR');
-  const ruleSinr = rulesMap.get('RULE-SINR-MAJOR');
-  const ruleRsrp = rulesMap.get('RULE-RSRP-WARN');
-  const ruleTp = rulesMap.get('RULE-TP-WARN');
+  const ruleAvail = rulesMap.get('RULE-AVAIL-CRIT') || rulesMap.get('availability_pct');
+  const ruleDrop = rulesMap.get('RULE-DROP-CRIT') || rulesMap.get('connection_drop_rate_pct');
+  const ruleLat = rulesMap.get('RULE-LAT-MAJOR') || rulesMap.get('latency_ms');
+  const rulePrb = rulesMap.get('RULE-PRB-MAJOR') || rulesMap.get('prb_utilization_pct');
+  const ruleSinr = rulesMap.get('RULE-SINR-MAJOR') || rulesMap.get('sinr_db');
+  const ruleRsrp = rulesMap.get('RULE-RSRP-WARN') || rulesMap.get('rsrp_dbm');
+  const ruleTp = rulesMap.get('RULE-TP-WARN') || rulesMap.get('throughput_mbps');
 
   // Load Topology, Telemetry, and Detection Rules
   const fetchTelemetry = useCallback(async () => {

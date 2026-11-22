@@ -8,14 +8,14 @@ export function evaluateMetricStatus(
   status: 'healthy' | 'warning' | 'critical' | 'neutral' | 'unknown';
   label: string;
 } {
-  if (value === null || value === undefined || isNaN(value)) {
-    return { status: 'unknown', label: 'Insufficient telemetry' };
-  }
   if (!rule) {
     return { status: 'neutral', label: 'Rule unavailable' };
   }
   if (!rule.enabled) {
     return { status: 'neutral', label: 'Rule inactive' };
+  }
+  if (value === null || value === undefined || isNaN(value)) {
+    return { status: 'unknown', label: 'Insufficient telemetry' };
   }
   if (rule.node_types && (!nodeType || !rule.node_types.includes(nodeType))) {
     return { status: 'neutral', label: `N/A: Applies to ${rule.node_types.join(', ')}` };
@@ -59,9 +59,9 @@ export function getMetricSubtitle(
   nodeType: string | undefined,
   unit: string
 ): string {
-  if (evalResult.status === 'unknown') return 'Insufficient telemetry';
   if (!rule) return 'Rule unavailable';
   if (!rule.enabled) return 'Rule inactive';
+  if (evalResult.status === 'unknown') return 'Insufficient telemetry';
   if (rule.node_types && (!nodeType || !rule.node_types.includes(nodeType))) {
     return `N/A: Applies to ${rule.node_types.join(', ')}`;
   }

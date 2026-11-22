@@ -201,11 +201,11 @@ describe('KPIs Threshold & Node Applicability Accuracy', () => {
       expect(await screen.findByText('KPI Monitoring & Telemetry Stream')).toBeInTheDocument();
 
       // Card subtitles should show Rule unavailable
-      const unavailableSubtitles = screen.getAllByText('Rule unavailable');
+      const unavailableSubtitles = await screen.findAllByText('Rule unavailable');
       expect(unavailableSubtitles.length).toBeGreaterThanOrEqual(4);
 
       // SimpleLineChart threshold badges should show Rule unavailable
-      const unavailableBadges = screen.getAllByText('Rule unavailable');
+      const unavailableBadges = await screen.findAllByText('Rule unavailable');
       expect(unavailableBadges.length).toBeGreaterThan(0);
     });
 
@@ -255,7 +255,8 @@ describe('KPIs Threshold & Node Applicability Accuracy', () => {
       );
 
       expect(await screen.findByText('KPI Monitoring & Telemetry Stream')).toBeInTheDocument();
-      expect(screen.getAllByText('Rule inactive').length).toBeGreaterThanOrEqual(1);
+      const inactiveBadges = await screen.findAllByText('Rule inactive');
+      expect(inactiveBadges.length).toBeGreaterThanOrEqual(1);
     });
   });
 });
