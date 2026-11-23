@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   CheckCircle,
   Filter,
+  PlusCircle,
   RefreshCw,
   Server,
   UserCheck,
@@ -44,6 +45,48 @@ export const IncidentsPage: React.FC = () => {
   const [actorName, setActorName] = useState('NOC_OPERATOR');
   const [resolutionNotes, setResolutionNotes] = useState('');
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Manual Create Incident State
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createAnchorNode, setCreateAnchorNode] = useState('SITE-01');
+  const [createSeverity, setCreateSeverity] = useState('MAJOR');
+  const [createCauseType, setCreateCauseType] = useState('CELL_OUTAGE');
+  const [createReason, setCreateReason] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createInProgress, setCreateInProgress] = useState(false);
+
+  const handleCreateIncident = async () => {
+    if (!createAnchorNode.trim()) {
+      setCreateError('Target / Anchor Node is required');
+      return;
+    }
+    setCreateInProgress(true);
+    setCreateError(null);
+    try {
+      const now = new Date().toISOString();
+      const groupId = `CORR-${createAnchorNode.trim()}-${Date.now().toString(36).toUpperCase()}`;
+      const newInc = await apiClient.createIncident({
+        correlation_group_id: groupId,
+        anchor_node_id: createAnchorNode.trim(),
+        alarms: [],
+        time_window_start: now,
+        time_window_end: now,
+        correlation_reason: createReason.trim() || `Manual operational incident on ${createAnchorNode.trim()}`,
+        suspected_cause_type: createCauseType,
+        suspected_target_id: createAnchorNode.trim(),
+        suspected_target_type: 'NODE',
+      });
+      setShowCreateModal(false);
+      setCreateReason('');
+      await fetchIncidents();
+      setSelectedIncident(newInc);
+      loadTimeline(newInc.incident_id);
+    } catch (err: unknown) {
+      setCreateError(err instanceof Error ? err.message : 'Failed to create incident');
+    } finally {
+      setCreateInProgress(false);
+    }
+  };
 
   const fetchIncidents = useCallback(async () => {
     setLoading(true);
@@ -317,14 +360,26 @@ export const IncidentsPage: React.FC = () => {
         description="Authoritative incident management, automated RCA evidence inspection, and operational SLA lifecycle tracking."
         breadcrumbs={[{ label: 'NOC' }, { label: 'Incidents' }]}
         actions={
-          <button
-            onClick={fetchIncidents}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-noc-surface border border-noc-border hover:bg-noc-surface-hover text-xs font-medium text-noc-text-primary transition disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setShowCreateModal(true);
+                setCreateError(null);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-xs font-medium text-white shadow-sm transition"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              Create Incident
+            </button>
+            <button
+              onClick={fetchIncidents}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-noc-surface border border-noc-border hover:bg-noc-surface-hover text-xs font-medium text-noc-text-primary transition disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         }
       />
 
@@ -743,6 +798,121 @@ export const IncidentsPage: React.FC = () => {
                   : confirmModal === 'ACKNOWLEDGE'
                   ? 'Confirm Acknowledge'
                   : 'Confirm Resolution'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Operator Create Incident Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-noc-surface border border-noc-border rounded-lg max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-noc-border mb-4">
+              <div className="flex items-center gap-2">
+                <PlusCircle className="w-5 h-5 text-blue-400" />
+                <h3 className="text-sm font-semibold text-noc-text-primary">
+                  Manually Instantiate Operational Incident
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-noc-text-muted hover:text-noc-text-primary p-1 rounded"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-noc-text-secondary mb-4 leading-relaxed">
+              Create an operational incident directly from the operator console. The incident will be registered
+              in the system, assigned deterministic SLA targets, and tracked on the NOC workspace.
+            </p>
+
+            {createError && (
+              <div className="p-3 mb-4 rounded bg-red-950/40 border border-red-500/30 text-xs text-red-300 font-mono">
+                {createError}
+              </div>
+            )}
+
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-xs font-semibold text-noc-text-secondary uppercase tracking-wider mb-1">
+                  Target / Anchor Topology Node
+                </label>
+                <input
+                  type="text"
+                  value={createAnchorNode}
+                  onChange={(e) => setCreateAnchorNode(e.target.value.toUpperCase())}
+                  placeholder="e.g. SITE-01, CORE-01, CELL-05..."
+                  className="w-full px-3 py-2 rounded bg-noc-base border border-noc-border text-xs text-noc-text-primary focus:outline-none focus:border-blue-500 font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-noc-text-secondary uppercase tracking-wider mb-1">
+                    Operational Severity
+                  </label>
+                  <select
+                    value={createSeverity}
+                    onChange={(e) => setCreateSeverity(e.target.value)}
+                    className="w-full px-3 py-2 rounded bg-noc-base border border-noc-border text-xs text-noc-text-primary focus:outline-none focus:border-blue-500 font-mono"
+                  >
+                    <option value="CRITICAL">CRITICAL (P1)</option>
+                    <option value="MAJOR">MAJOR (P2)</option>
+                    <option value="MINOR">MINOR (P3)</option>
+                    <option value="WARNING">WARNING (P4)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-noc-text-secondary uppercase tracking-wider mb-1">
+                    Suspected Condition
+                  </label>
+                  <select
+                    value={createCauseType}
+                    onChange={(e) => setCreateCauseType(e.target.value)}
+                    className="w-full px-3 py-2 rounded bg-noc-base border border-noc-border text-xs text-noc-text-primary focus:outline-none focus:border-blue-500 font-mono"
+                  >
+                    <option value="CELL_OUTAGE">CELL_OUTAGE</option>
+                    <option value="BACKHAUL_FAILURE">BACKHAUL_FAILURE</option>
+                    <option value="RADIO_INTERFERENCE">RADIO_INTERFERENCE</option>
+                    <option value="CELL_CONGESTION">CELL_CONGESTION</option>
+                    <option value="SITE_POWER_FAILURE">SITE_POWER_FAILURE</option>
+                    <option value="CORE_ROUTER_FAILURE">CORE_ROUTER_FAILURE</option>
+                    <option value="UNKNOWN">UNKNOWN</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-noc-text-secondary uppercase tracking-wider mb-1">
+                  Incident Operational Reason / Dispatch Notes
+                </label>
+                <textarea
+                  value={createReason}
+                  onChange={(e) => setCreateReason(e.target.value)}
+                  placeholder="Operational details, symptoms observed, or dispatch directives..."
+                  rows={3}
+                  className="w-full px-3 py-2 rounded bg-noc-base border border-noc-border text-xs text-noc-text-primary focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-noc-border">
+              <button
+                onClick={() => setShowCreateModal(false)}
+                disabled={createInProgress}
+                className="px-3 py-1.5 rounded bg-noc-base border border-noc-border text-xs text-noc-text-secondary hover:text-noc-text-primary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateIncident}
+                disabled={createInProgress}
+                className="px-4 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {createInProgress ? 'Instantiating...' : 'Instantiate Incident'}
               </button>
             </div>
           </div>

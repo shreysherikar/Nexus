@@ -420,6 +420,7 @@ class TestScenarioReplayIntegration:
             "radio_interference",
             "cell_congestion",
             "site_power_failure",
+            "core_router_failure",
         ],
     )
     def test_replay_evaluator_all_reference_scenarios(

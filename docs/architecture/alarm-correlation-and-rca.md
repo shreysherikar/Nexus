@@ -1,11 +1,11 @@
-# NEXUS Alarm Correlation & Root Cause Analysis (RCA) Specification
+# NEXUS Alarm Correlation & Root Cause Analysis (RCA)
 
 ## 1. Overview and Architectural Boundaries
 
-Milestone 5 introduces two independent domain subsystems to NEXUS:
+The platform provides two decoupled domain subsystems for diagnostic synthesis:
 - **`nexus.correlation`**: Clusters disparate point-in-time alarm records into coherent, immutable correlation groups based on temporal proximity, topological hierarchy, and symptom compatibility.
 - **`nexus.rca`**: Evaluates correlation groups against explainable diagnostic rules to determine ranked root-cause hypotheses, suspect targets (nodes or transport links), confidence scores, and actionable operational recommendations.
-- **`nexus.evaluation`** (extension): Benchmarks both correlation grouping effectiveness (noise reduction ratio) and RCA diagnostic accuracy (top-1 cause accuracy, target accuracy, coverage) against injected ground-truth fault events.
+- **`nexus.evaluation`** (extension): Benchmarks both correlation grouping effectiveness (noise reduction ratio) and RCA diagnostic accuracy (top-1 cause accuracy, target accuracy, coverage) against ground-truth fault events.
 
 ```
 +-------------------------------------------------------------+
@@ -208,4 +208,4 @@ Ground-truth correctness is strictly evaluated **after** candidate selection:
 
 1. **Static Transport Mapping**: Transport link correlation relies on static link endpoints defined in `TransportNetwork`. Dynamic routing changes or multi-path rerouting are out of scope.
 2. **Simultaneous Power vs. Backhaul Disambiguation**: In scenarios where a physical link cut causes downstream nodes to become completely unresponsive, telemetry snapshots reflect total availability loss identical to power blackout. In such dual-symptom situations, both hypotheses score highly as co-primary diagnostic candidates.
-3. **Batch-Oriented Processing**: Correlation and RCA operate on supplied batches of alarms and snapshots. Streaming sliding-window correlation across indefinite continuous streams is deferred to future telemetry pipeline milestones.
+3. **Batch-Oriented Processing**: Correlation and RCA operate on supplied batches of alarms and snapshots.

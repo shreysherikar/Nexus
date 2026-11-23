@@ -1603,4 +1603,144 @@ class TestRCAFinalCorrectnessPass:
         assert "complete site outage" not in hyp.explanation.lower()
 
 
+class TestSixFaultTypesRCARegression:
+    """Regression test suite verifying diagnostic correctness across all six reference fault types."""
 
+    @pytest.fixture
+    def setup_network(self) -> tuple[Topology, TransportNetwork]:
+        topo = build_simulated_network()
+        trans = build_reference_transport_network(topo)
+        return topo, trans
+
+    @pytest.fixture
+    def base_time(self) -> datetime:
+        return datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_regression_cell_outage(self, setup_network, base_time):
+        topo, trans = setup_network
+        alarms = [
+            make_alarm("alm-1", "CELL-01", "availability_pct", current_value=0.0, threshold=95.0, first_seen=base_time),
+            make_alarm("alm-2", "CELL-01", "throughput_mbps", current_value=0.0, threshold=5.0, first_seen=base_time),
+        ]
+        corr = AlarmCorrelationEngine(topology=topo).correlate(alarms)
+        rca = RootCauseAnalysisEngine(topology=topo, transport=trans)
+        snaps = [
+            make_cell_snapshot("CELL-01", availability_pct=0.0, throughput_mbps=0.0),
+            make_cell_snapshot("CELL-02", availability_pct=99.9, throughput_mbps=150.0),
+            make_cell_snapshot("CELL-03", availability_pct=99.9, throughput_mbps=145.0),
+        ]
+        res = rca.analyze_group(corr.groups[0], telemetry_snapshots=snaps)
+        p = res.primary_hypothesis
+        assert p is not None
+        assert p.cause_type == RootCauseType.CELL_OUTAGE
+        assert p.target_id == "CELL-01"
+        assert p.target_type == TargetType.NODE
+        assert p.confidence_score >= 0.70
+
+    def test_regression_backhaul_failure(self, setup_network, base_time):
+        topo, trans = setup_network
+        alarms = [
+            make_alarm("alm-1", "SITE-01", "availability_pct", current_value=0.0, threshold=95.0, first_seen=base_time),
+            make_alarm("alm-2", "CELL-01", "throughput_mbps", current_value=0.0, threshold=5.0, first_seen=base_time),
+            make_alarm("alm-3", "CELL-02", "throughput_mbps", current_value=0.0, threshold=5.0, first_seen=base_time),
+            make_alarm("alm-4", "CELL-03", "throughput_mbps", current_value=0.0, threshold=5.0, first_seen=base_time),
+        ]
+        corr = AlarmCorrelationEngine(topology=topo).correlate(alarms)
+        rca = RootCauseAnalysisEngine(topology=topo, transport=trans)
+        snaps = [
+            make_cell_snapshot("CELL-01", availability_pct=0.0, throughput_mbps=0.0, latency_ms=65.0),
+            make_cell_snapshot("CELL-02", availability_pct=0.0, throughput_mbps=0.0, latency_ms=60.0),
+            make_cell_snapshot("CELL-03", availability_pct=0.0, throughput_mbps=0.0, latency_ms=62.0),
+            make_cell_snapshot("SITE-01", availability_pct=0.0, throughput_mbps=0.0, latency_ms=35.0),
+        ]
+        res = rca.analyze_group(corr.groups[0], telemetry_snapshots=snaps)
+        p = res.primary_hypothesis
+        assert p is not None
+        assert p.cause_type == RootCauseType.BACKHAUL_FAILURE
+        assert p.target_id == "LINK-AGG-01-SITE-01"
+        assert p.target_type == TargetType.TRANSPORT_LINK
+        assert p.confidence_score >= 0.85
+
+    def test_regression_radio_interference(self, setup_network, base_time):
+        topo, trans = setup_network
+        alarms = [
+            make_alarm("alm-1", "CELL-05", "sinr_db", current_value=-5.0, threshold=0.0, first_seen=base_time),
+            make_alarm("alm-2", "CELL-05", "connection_drop_rate_pct", current_value=8.0, threshold=2.0, first_seen=base_time),
+        ]
+        corr = AlarmCorrelationEngine(topology=topo).correlate(alarms)
+        rca = RootCauseAnalysisEngine(topology=topo, transport=trans)
+        snaps = [
+            make_cell_snapshot("CELL-05", sinr_db=-5.0, connection_drop_rate_pct=8.0, availability_pct=98.5),
+            make_cell_snapshot("CELL-04", sinr_db=18.0, availability_pct=99.9),
+            make_cell_snapshot("CELL-06", sinr_db=18.0, availability_pct=99.9),
+        ]
+        res = rca.analyze_group(corr.groups[0], telemetry_snapshots=snaps)
+        p = res.primary_hypothesis
+        assert p is not None
+        assert p.cause_type == RootCauseType.RADIO_INTERFERENCE
+        assert p.target_id == "CELL-05"
+        assert p.target_type == TargetType.NODE
+        assert p.confidence_score >= 0.70
+
+    def test_regression_cell_congestion(self, setup_network, base_time):
+        topo, trans = setup_network
+        alarms = [
+            make_alarm("alm-1", "CELL-10", "prb_utilization_pct", current_value=95.0, threshold=80.0, first_seen=base_time),
+            make_alarm("alm-2", "CELL-10", "latency_ms", current_value=55.0, threshold=30.0, first_seen=base_time),
+        ]
+        corr = AlarmCorrelationEngine(topology=topo).correlate(alarms)
+        rca = RootCauseAnalysisEngine(topology=topo, transport=trans)
+        snaps = [
+            make_cell_snapshot("CELL-10", prb_utilization_pct=95.0, latency_ms=55.0, throughput_mbps=30.0),
+        ]
+        res = rca.analyze_group(corr.groups[0], telemetry_snapshots=snaps)
+        p = res.primary_hypothesis
+        assert p is not None
+        assert p.cause_type == RootCauseType.CELL_CONGESTION
+        assert p.target_id == "CELL-10"
+        assert p.target_type == TargetType.NODE
+        assert p.confidence_score >= 0.70
+
+    def test_regression_site_power_failure(self, setup_network, base_time):
+        topo, trans = setup_network
+        alarms = [
+            make_alarm("alm-1", "SITE-04", "availability_pct", current_value=0.0, threshold=95.0, first_seen=base_time),
+            make_alarm("alm-2", "CELL-10", "availability_pct", current_value=0.0, threshold=95.0, first_seen=base_time),
+            make_alarm("alm-3", "CELL-11", "availability_pct", current_value=0.0, threshold=95.0, first_seen=base_time),
+            make_alarm("alm-4", "CELL-12", "availability_pct", current_value=0.0, threshold=95.0, first_seen=base_time),
+        ]
+        corr = AlarmCorrelationEngine(topology=topo).correlate(alarms)
+        rca = RootCauseAnalysisEngine(topology=topo, transport=trans)
+        snaps = [
+            make_cell_snapshot("CELL-10", availability_pct=0.0, latency_ms=20.0),
+            make_cell_snapshot("CELL-11", availability_pct=0.0, latency_ms=20.0),
+            make_cell_snapshot("CELL-12", availability_pct=0.0, latency_ms=20.0),
+            make_cell_snapshot("SITE-04", availability_pct=0.0, latency_ms=10.0),
+        ]
+        res = rca.analyze_group(corr.groups[0], telemetry_snapshots=snaps)
+        p = res.primary_hypothesis
+        assert p is not None
+        assert p.cause_type == RootCauseType.SITE_POWER_FAILURE
+        assert p.target_id == "SITE-04"
+        assert p.target_type == TargetType.NODE
+        assert p.confidence_score >= 0.80
+
+    def test_regression_core_router_failure(self, setup_network, base_time):
+        topo, trans = setup_network
+        alarms = [
+            make_alarm(f"alm-{n.node_id}", n.node_id, "availability_pct", current_value=0.0, threshold=95.0, first_seen=base_time)
+            for n in topo.all_nodes()
+        ]
+        corr = AlarmCorrelationEngine(topology=topo).correlate(alarms)
+        rca = RootCauseAnalysisEngine(topology=topo, transport=trans)
+        snaps = [
+            make_cell_snapshot(n.node_id, availability_pct=0.0)
+            for n in topo.all_nodes()
+        ]
+        res = rca.analyze_group(corr.groups[0], telemetry_snapshots=snaps)
+        p = res.primary_hypothesis
+        assert p is not None
+        assert p.cause_type == RootCauseType.CORE_ROUTER_FAILURE
+        assert p.target_id == "CORE-01"
+        assert p.target_type == TargetType.NODE
+        assert p.confidence_score >= 0.90

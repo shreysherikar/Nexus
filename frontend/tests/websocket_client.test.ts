@@ -76,6 +76,13 @@ describe('NexusWebSocketClient', () => {
   it('initializes in DISCONNECTED state if url is empty or autoConnect is false', () => {
     client = new NexusWebSocketClient({ url: '', autoConnect: false });
     expect(client.getStatus()).toBe('DISCONNECTED');
+    // Empty url safely resolves to active browser host WebSocket endpoint
+    expect(client.getUrl()).toMatch(/^wss?:\/\/.*\/ws\/live$/);
+  });
+
+  it('resolves empty or undefined URL to browser host /ws/live endpoint', () => {
+    expect(resolveWsUrl('')).toMatch(/^wss?:\/\/.*\/ws\/live$/);
+    expect(resolveWsUrl(undefined)).toMatch(/^wss?:\/\/.*\/ws\/live$/);
   });
 
   it('resolves relative /ws/live and converts http/https protocols safely', () => {

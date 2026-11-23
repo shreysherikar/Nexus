@@ -71,7 +71,7 @@ export class NexusWebSocketClient {
     const envWsUrl =
       (typeof import.meta !== 'undefined' && import.meta.env?.VITE_WS_URL) || '';
     const rawUrl = options.url !== undefined ? options.url : envWsUrl;
-    this.url = rawUrl === '' ? '' : resolveWsUrl(rawUrl);
+    this.url = resolveWsUrl(rawUrl);
     this.reconnectInterval = options.reconnectInterval ?? 1000;
     this.maxReconnectInterval = options.maxReconnectInterval ?? 30000;
     this.reconnectDecay = options.reconnectDecay ?? 1.5;
@@ -92,7 +92,7 @@ export class NexusWebSocketClient {
   }
 
   public setUrl(newUrl: string): void {
-    const resolved = newUrl === '' ? '' : resolveWsUrl(newUrl);
+    const resolved = resolveWsUrl(newUrl);
     if (this.url !== resolved) {
       this.url = resolved;
       if (this.status === 'CONNECTED' || this.status === 'CONNECTING' || this.status === 'RECONNECTING') {

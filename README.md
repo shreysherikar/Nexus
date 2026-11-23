@@ -1,323 +1,411 @@
 # NEXUS — Network Intelligence & Incident Management Platform
 
-NEXUS is an independent Python platform providing hierarchical network modeling, synthetic telemetry generation, and controlled fault injection for telecommunications infrastructure engineering and testing.
+NEXUS is a modular network intelligence and automated incident management platform designed for telecommunications infrastructure observability and operations. It models hierarchical 4-tier network topologies, generates deterministic synthetic radio and performance telemetry on demand, detects anomalies using static rules and statistical baselines, correlates cascading alarms using Lowest Common Ancestor (LCA) graph algorithms, performs explainable multi-hypothesis Root Cause Analysis (RCA), and enforces operational Service Level Agreements (SLAs) through a real-time Network Operations Center (NOC) dashboard.
 
 ---
 
-## Current Capabilities
+## 1. Project Overview
 
-The repository currently implements the following modules:
+NEXUS provides an end-to-end operational software stack for telecommunications Network Operations Centers (NOCs). Rather than treating alarms as isolated tickets, NEXUS links real-time telemetry and alarm streams directly to an underlying network topology graph.
 
-- **Network Topology Domain (`nexus.topology`)**:
-  - Validated hierarchical graph modeling Core, Aggregation, Site, and Cell tiers.
-  - Immutable node entities (`Node`) with operational statuses (`ONLINE`, `OFFLINE`, `DEGRADED`, `MAINTENANCE`).
-  - Tier hierarchy rules, cycle detection, and atomic reparenting safeguards.
-  - Reference 27-node simulated network builder (`CORE-01`, 2 Aggregation nodes, 6 Sites, 18 Cells).
-- **Transport Network Domain (`nexus.transport`)**:
-  - Bidirectional transport links (`TransportLink`) with capacity and latency attributes.
-  - Endpoint validation and strict parent-child link alignment over the network topology.
-  - Reference 26-link transport network builder connecting all non-root hierarchy edges.
-- **Telemetry & KPI Domain (`nexus.telemetry`)**:
-  - Typed, validated KPI snapshots covering radio parameters (RSRP, SINR, PRB utilization), performance metrics (throughput, latency), and reliability metrics (drop rate, availability, handover success rate).
-  - Construction-time validation enforcing finite bounds, non-negative rates, and percentage limits.
-  - Tier baseline operating profiles (`DEFAULT_PROFILES`) with custom profile mapping support.
-  - Deterministic synthetic generator (`SyntheticTelemetryGenerator`) providing reproducible time-series steps and temporal continuity.
-- **Fault Injection & Scenario Engine (`nexus.fault`)**:
-  - Validated immutable fault models (`CELL_OUTAGE`, `BACKHAUL_FAILURE`, `RADIO_INTERFERENCE`, `CELL_CONGESTION`, `SITE_POWER_FAILURE`).
-  - Half-open active interval evaluation (`start_time <= timestamp < end_time`).
-  - Downstream blast-radius propagation over topology and transport networks.
-  - Conflict detection rejecting ambiguous overlapping faults on the same target.
-  - Deterministic ground-truth recording (`GroundTruthRecord`) for benchmark evaluation.
-  - Reference suite of 5 standard fault scenarios (`build_reference_scenarios`).
-- **Anomaly Detection & Alarm Generation (`nexus.detection`)**:
-  - Configurable threshold-based detection with comparison operators and hysteresis recovery.
-  - Statistical anomaly detection using Rolling Median (MAD-based) and EWMA baselines with contamination prevention.
-  - Alarm lifecycle management (`ACTIVE`, `CLEARED`), stable deduplication identity, and diagnostic evidence preservation.
-  - Sequential, deterministic batch processing with strict chronological monotonicity and duplicate observation guards.
-  - Strict decoupling: zero import dependency or runtime reliance on fault ground truth.
-- **Alarm Correlation Subsystem (`nexus.correlation`)**:
-  - Deterministic clustering of point-in-time alarms into immutable correlation groups (`AlarmCorrelationEngine`).
-  - Strict maximum onset-time span invariant enforcing time windows and preventing transitive time-window chaining.
-  - Lowest Common Ancestor (LCA) resolution preferring nearest meaningful dependencies (Site, Aggregation) based on topology hierarchy.
-  - Distant ancestor protection preventing spurious correlation of independent branches at the Core level.
-  - Symptom compatibility isolation ensuring localized RF and resource spikes do not cross node boundaries.
-  - Immutable correlation groups (`CorrelationGroup`) and noise reduction ratio metrics.
-- **Root Cause Analysis Subsystem (`nexus.rca`)**:
-  - Explainable, deterministic rule-based diagnostic engine (`RootCauseAnalysisEngine`).
-  - Active telemetry participation using fresh `KPISnapshot` observations with deterministic freshness windows and explicit source attribution (`evidence_source: ALARM, SNAPSHOT, TOPOLOGY`).
-  - Five core diagnostic pattern evaluators with strict diagnostic thresholds: Backhaul link cut, Site power failure, Radio interference, Cell congestion, and Cell outage.
-  - Multi-tier target identification (distinguishing `NODE` and `TRANSPORT_LINK` root causes).
-  - Additive evidence scoring, strict tie-breaking ranking, and explicit `UNKNOWN` fallback policy.
-  - Actionable operational remediation guidance for incident response.
-- **Evaluation Subsystem (`nexus.evaluation`)**:
-  - Post-detection and post-RCA benchmark evaluation against fault ground-truth records.
-  - Pure spatio-temporal ground-truth-independent candidate selection matching without diagnostic confirmation bias.
-  - Detection metric calculations: Precision, Recall, F1 score, and Mean Time to Detect (MTTD).
-  - RCA accuracy metrics (`evaluate_rca`): Top-1 cause accuracy, target accuracy, diagnosis coverage, and alarm noise reduction ratio.
-  - Configurable evaluation grace periods and full scenario replay harness (`ScenarioReplayEvaluator`).
-
-- **Incident Management & SLA Tracking Subsystem (`nexus.incidents`)**:
-  - Persistent operational incident entity with strict lifecycle state machine (`OPEN -> ACKNOWLEDGED -> RESOLVED`).
-  - Validated alarm ingestion (`CorrelatedAlarmDTO`) preserving actual alarm metrics, severities, and timestamps without fabrication.
-  - Operational-impact severity policy (`CRITICAL`, `MAJOR`, `WARNING`, `MINOR`) decoupled from diagnostic confidence.
-  - Strict confidence validation (finite floats in $[0.0, 1.0]$, preserving `None` when unavailable, no invented defaults).
-  - Timezone-aware UTC SLA deadline management with configurable targets per severity.
-  - Append-only chronological audit timeline capturing state transitions and actor details.
-  - Operational metrics tracking: Mean Time to Acknowledge (MTTA), Mean Time to Resolve (MTTR), Mean Time to Detect (MTTD; returned as `None` when evaluation data is absent), and SLA breach accounting computed via $O(1)$ memory streaming iteration.
-  - PostgreSQL persistence with SQLAlchemy 2.x and mandatory Alembic schema migrations (`alembic upgrade head`), with SQLite automatic table creation supported for lightweight local development.
-  - REST API powered by FastAPI with OpenAPI interactive documentation (`/api/v1/incidents`).
-- **Backend Read APIs & Real-Time Event Infrastructure (M7.2)**:
-  - `GET /api/v1/topology`: Exposes the authoritative 27-node network inventory (Core, Aggregation, Site, Cell) with optional, strictly validated geographic coordinates (`latitude` $[-90, 90]$, `longitude` $[-180, 180]$) and parent/child relationships.
-  - `GET /api/v1/telemetry`: Ephemeral, bounded in-memory telemetry store (`TelemetryStore`, capacity 10,000 snapshots with FIFO eviction, unpersisted with restart data loss) populated on-demand via `TelemetryPipeline` (`generate_step`) or scenario replay without uncontrolled background loops. Queryable by `node_id`, `node_type`, and ISO 8601 time windows with deterministic ordering and duplicate rejection.
-  - `GET /api/v1/alarms`: Standalone alarm query API wrapping `AlarmService` with status, severity, pagination, and deterministic sorting.
-  - `GET /api/v1/detection/rules`: Authoritative threshold rule registry exposing the 8 default telecom detection rules with operators, thresholds, clear thresholds, severities, and applicable node types.
-  - WebSocket `/ws/live`: Live event transport publishing authentic system state changes (`TELEMETRY_SNAPSHOT`, `ALARM_CREATED`, `ALARM_UPDATED`, `ALARM_CLEARED`, `INCIDENT_CREATED`, `INCIDENT_ACKNOWLEDGED`, `INCIDENT_RESOLVED`, `TOPOLOGY_STATUS_CHANGED`). Features thread-safe cross-thread dispatch via `call_soon_threadsafe`, serialized outbound writes for event and heartbeat PONG frames, and bounded per-subscriber queues (maxsize 100) with FIFO backpressure eviction. Ephemeral transport without durable replay (authoritative snapshot + delta streams).
-- **Network Operations Center (NOC) Dashboard (M7)**:
-  - **Overview Dashboard (`/overview`)**: Real-time operational summary with KPI cards, incident and alarm queues, severity and lifecycle distributions, and health classification (Healthy, Degraded, Offline, Insufficient Telemetry) evaluated directly against actual topology and telemetry.
-  - **Network Topology & Hierarchy (`/network-map`)**: Complete logical hierarchy tree (Core -> Aggregation -> Sites -> Cells) with search, node tier filters, status filters, node detail drawer, and honest coordinate visualization (empty state when physical GPS is not configured).
-  - **KPI Monitoring & Telemetry (`/kpis`)**: Synthetic telemetry monitoring with deliberate operator step generation (`POST /api/v1/telemetry/generate-step`), node selection, live trend charts with backend detection thresholds, and honest single-observation rendering.
-  - **Alarms Inventory (`/alarms`)**: Paginated alarm management with severity and status filters, rule search, node search, and detailed alarm drawer with diagnostic evidence.
-  - **Incident Workspace (`/incidents`)**: Complete incident operations with automated RCA hypothesis inspection, audit timeline, and operational lifecycle actions (Acknowledge with operator identity, Resolve with mandatory operator findings and confirmation dialog).
-  - **SLA & Operational Analytics (`/analytics`)**: Compliance rate breakdown, MTTA, MTTR, MTTD reporting, and severity/status distribution charts computed live from persistent PostgreSQL storage.
-  - **Real-Time Live Transport (`/ws/live`)**: WebSocket synchronization with automatic reconnection, deduplication, backpressure handling, and REST state reconciliation.
-  - **Frontend Quality Assurance**: Full Vitest and React Testing Library suite covering components, client API, navigation routing, and end-to-end operational scenarios.
-- **Observability & Prometheus Metrics Engine (M8.1)**:
-  - Native Prometheus exposition format (`GET /metrics`) compliant with open standards.
-  - Standard HTTP request counters (`nexus_http_requests_total`) and latency histograms (`nexus_http_request_duration_seconds`) partitioned by route template, HTTP method, and status code.
-  - Domain gauges reflecting authoritative system state:
-    - Telemetry aggregate KPIs by node tier (`nexus_telemetry_aggregate_kpi`).
-    - Active alarms by severity (`nexus_active_alarms_total`).
-    - Incident status and severity distribution (`nexus_incidents_total`).
-    - Incident SLA metrics (`nexus_sla_target_hours`, `nexus_sla_time_remaining_seconds`) and breach counters (`nexus_sla_breaches_total`).
-    - Active fault scenarios (`nexus_active_fault_scenarios`) and affected node counts (`nexus_affected_nodes_total`).
-    - Application readiness status indicator (`nexus_ready`).
-  - Bounded-cardinality labels and zero ground-truth leakage into operational metrics.
-
-*Notice: Network telemetry and fault scenarios are generated by an internal synthetic simulation engine. NEXUS operates independently without requiring live carrier feeds or physical hardware.*
+Key capabilities:
+- **Hierarchical Network Topology**: Strict 4-tier topological modeling (`Core -> Aggregation -> Site -> Cell`) with 27 nodes and 26 bidirectional transport dependencies.
+- **Deterministic Synthetic Telemetry**: Multi-variate KPI generation across radio, performance, and reliability dimensions without external dependencies.
+- **Controlled Fault Simulation**: Six reference telecom failure scenarios with exact downstream blast radius calculation and recovery verification.
+- **Decoupled Anomaly Detection**: Threshold detectors with hysteresis anti-flapping alongside rolling statistical baselines (Median/MAD, EWMA).
+- **Topology-Aware Alarm Correlation**: Graph-based clustering of point-in-time alarms using Lowest Common Ancestor (LCA) traversal to suppress cascading symptoms.
+- **Explainable Root Cause Analysis (RCA)**: Multi-hypothesis rule evaluators scoring candidate causes, identifying targets (`NODE` vs. `TRANSPORT_LINK`), and providing operational remediation guidance.
+- **Persistent Incident Management**: Transactional incident tracking in PostgreSQL via SQLAlchemy and Alembic, with SLA deadline enforcement and an append-only audit timeline.
+- **Real-Time Operational Delivery**: Low-latency WebSocket streaming (`/ws/live`) to a dark-mode React NOC dashboard with live topology visualization.
+- **Complete Observability**: Standard Prometheus metrics exporter (`/metrics`) and provisioned Grafana dashboards.
 
 ---
 
-## Planned Capabilities
+## 2. Engineering Problem
 
-The following capabilities are planned for upcoming milestones and are not yet implemented:
-- Automated closed-loop remediation workflows and incident ticket management.
-- Grafana dashboard provisioning, alerting rules, and datasource automation (M8.3).
+Telecommunications networks and distributed service provider backbones are hierarchical, highly interdependent environments. Network Operations Centers face three critical operational bottlenecks:
 
----
+1. **Cascading Alarm Storms**: When an upstream transport link or power facility fails, dozens or hundreds of downstream nodes trigger symptomatic alarms simultaneously. In a traditional ticketing system, each alarm generates an independent alert, overwhelming operators and obscuring the underlying cause.
+2. **Context-Free Telemetry Triage**: High-frequency metric streams (throughput, latency, packet drop rates) arrive asynchronously without topological context. Operators must manually cross-reference network diagrams to infer whether an issue is an isolated radio cell defect or a systemic backhaul cut.
+3. **Manual, Error-Prone SLA Tracking**: Correlating related alerts by hand delays Mean Time to Acknowledge (MTTA) and Mean Time to Resolve (MTTR), increasing operational overhead and causing costly SLA breaches.
 
-## Technology Stack
-
-- **Backend**: Python 3.11+, FastAPI, SQLAlchemy 2.x, Alembic, PostgreSQL (`psycopg[binary]`), Pydantic v2, `prometheus-client`
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router v6, Lucide React, Nginx
-- **Observability & Containerization**: Prometheus, Docker, Docker Compose
-- **Architecture**: Modular monolith with decoupled domain boundaries and containerized SPA frontend reverse proxy
-- **Testing & Quality**: `pytest` (backend), `vitest`, `@testing-library/react`, `eslint` (frontend)
+NEXUS addresses these challenges by embedding topological dependency awareness directly into the telemetry ingestion, correlation, and incident triage pipeline.
 
 ---
 
-## Docker Compose Deployment (Recommended)
+## 3. System Architecture
 
-NEXUS includes a reproducible, multi-service Docker Compose environment orchestrating the complete platform:
+The NEXUS platform follows a service-oriented modular monolithic architecture. Backend subsystems communicate via typed domain models, exposing RESTful endpoints and real-time WebSocket feeds to the web console and Prometheus scraper.
 
-```
-                          ┌──────────────────────────┐
-                          │   NEXUS Web / Nginx      │
-                          │   (Host: 127.0.0.1:3000) │
-                          └──────┬────────────┬──────┘
-                                 │            │
-                 SPA / Static    │            │ Reverse Proxy:
-                 Assets          │            │ /api/, /ws/,
-                                 ▼            │ /health, /ready
-                          ┌─────────────┐     │
-                          │ React/Vite  │     ▼
-                          │ Production  │ ┌──────────────────────┐
-                          │ Build       │ │ NEXUS Backend API    │◄──────┐ Internal Scrape
-                          └─────────────┘ │ (127.0.0.1:8000)     │       │ /metrics
-                                          └──────┬───────────────┘       │
-                                                 │                ┌──────┴────────┐
-                                                 │ DB             │ Prometheus    │
-                                                 ▼                │ (127.0.0.1:   │
-                                          ┌──────────────┐        │  9090)        │
-                                          │ PostgreSQL   │        └───────────────┘
-                                          │ (Internal)   │
-                                          └──────────────┘
+```mermaid
+flowchart TD
+    subgraph Simulation_Engine ["Simulation & Telemetry Layer"]
+        SIM["Synthetic Telemetry Generator<br/>(nexus.telemetry.generator)"]
+        FAULT["Fault Scenario Engine<br/>(nexus.fault / nexus.transport)"]
+        TOPO["Topology & Transport Graph<br/>(27 Nodes, 26 Transport Links)"]
+        SIM -->|"Inject Impairments"| FAULT
+        FAULT -->|"Generate Snapshots"| STORE["In-Memory TelemetryStore<br/>(Sliding Window Buffer)"]
+    end
+
+    subgraph Detection_Correlation ["Detection & Diagnostic Layer"]
+        STORE --> DET["Anomaly Detection Engine<br/>(Thresholds, MAD, EWMA)"]
+        DET -->|"Active Alarms"| CORR["Alarm Correlation Engine<br/>(LCA & Symptom Compatibility)"]
+        CORR -->|"Correlation Groups"| RCA["Root Cause Analysis (RCA) Engine<br/>(Multi-Hypothesis Scoring)"]
+    end
+
+    subgraph Incident_Delivery ["Incident & Real-Time Delivery Layer"]
+        RCA -->|"Diagnosed Cluster"| INC["Incident Management Service<br/>(nexus.incident)"]
+        INC -->|"Transactional ORM"| DB[(PostgreSQL Database<br/>nexus_db)]
+
+        STORE -->|"KPI Snapshots"| BROADCAST["Event Broadcaster<br/>(nexus.events)"]
+        DET -->|"Alarm Transitions"| BROADCAST
+        INC -->|"Incident Lifecycle Events"| BROADCAST
+    end
+
+    subgraph Client_Observability ["Clients & Observability"]
+        BROADCAST -->|"WebSocket /ws/live"| FRONTEND["NOC Web Console<br/>(React / TypeScript / Vite)"]
+        INC -->|"REST API /api/v1"| FRONTEND
+
+        PROM["Prometheus Server"] -->|"Scrape /metrics"| METRICS["Metrics Exporter<br/>(nexus.telemetry.metrics)"]
+        GRAF["Grafana Dashboards"] -->|"PromQL"| PROM
+    end
 ```
 
-### Services & Endpoints
+### Subsystem Boundaries
 
-| Service | Container Name | Host Binding | Internal Port | Primary Endpoints / Functions | Healthcheck |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Frontend** | `nexus-frontend` | `127.0.0.1:3000` | `80` | `http://localhost:3000/` (NOC Dashboard)<br>`http://localhost:3000/api/` (API proxy)<br>`http://localhost:3000/ws/live` (WebSocket proxy)<br>*(Note: `/metrics` is blocked from public frontend proxy)* | `wget http://127.0.0.1/health` |
-| **Backend** | `nexus-backend` | `127.0.0.1:8000` | `8000` | `http://127.0.0.1:8000/docs` (Swagger UI)<br>`http://127.0.0.1:8000/ready` (Subsystem readiness)<br>`http://127.0.0.1:8000/metrics` (Prometheus exposition)<br>`ws://127.0.0.1:8000/ws/live` (WebSocket) | `curl -f http://localhost:8000/ready` |
-| **Database** | `nexus-postgres` | Internal only | `5432` | PostgreSQL 15 persistent relational store | `pg_isready -U nexus_user -d nexus_db` |
-| **Prometheus** | `nexus-prometheus`| `127.0.0.1:9090` | `9090` | `http://127.0.0.1:9090/` (Prometheus Web UI)<br>`http://127.0.0.1:9090/targets` (Active scrape targets)<br>`http://127.0.0.1:9090/-/healthy` (Health status) | Container runtime |
+| Subsystem | Package | Architectural Responsibility |
+| :--- | :--- | :--- |
+| **Topology** | `nexus.topology` | 4-tier network graph representation, node models, hierarchy invariants, cycle prevention. |
+| **Transport** | `nexus.transport` | Physical/logical transport link graph, upstream/downstream endpoints, routing paths. |
+| **Telemetry** | `nexus.telemetry` | KPI snapshots, operational profiles, synthetic generation, in-memory sliding buffer. |
+| **Fault** | `nexus.fault` | Fault models, conflict detection, reference scenarios, ground truth recording. |
+| **Detection** | `nexus.detection` | Threshold rules, hysteresis, rolling median/MAD, EWMA, alarm lifecycle state machine. |
+| **Correlation** | `nexus.correlation` | Temporal clustering, LCA graph traversal, symptom compatibility, distant ancestor protection. |
+| **RCA** | `nexus.rca` | Multi-hypothesis diagnostic evaluation, target identification, confidence scoring, evidence attribution. |
+| **Incident** | `nexus.incident` | Incident domain entity, operational severity policy, SLA tracking, append-only audit timeline. |
+| **Events** | `nexus.events` | Serialized WebSocket broadcasting, cross-thread event dispatch, slow-consumer queue management. |
+| **Evaluation**| `nexus.evaluation` | Post-hoc benchmark validation (precision, recall, F1, MTTD, RCA accuracy, noise reduction). |
 
-### Prerequisites
-- Docker Engine 20.10+
-- Docker Compose v2+ (e.g. `docker compose` or `docker-compose`)
+---
 
-### 1. Configure Environment
-Before launching Compose, create a local `.env` configuration from the provided template:
+## 4. Network and Telemetry Model
+
+### 4.1 27-Node Reference Topology
+
+NEXUS models a deterministic reference network comprising **27 nodes** across 4 hierarchical tiers:
+
+```
++-------------------------------------------------------------+
+|                     CORE TIER (1 Node)                      |
+|                         [CORE-01]                           |
++------------------------------+------------------------------+
+                               |
+               +---------------+---------------+
+               |                               |
++--------------v--------------+ +--------------v--------------+
+|   AGGREGATION TIER (West)   | |   AGGREGATION TIER (East)   |
+|         [AGG-01]            | |         [AGG-02]            |
++--------------+--------------+ +--------------+--------------+
+               |                               |
+       +-------+-------+               +-------+-------+
+       |       |       |               |       |       |
++------v-+ +---v----+ +-v------+ +-----v--+ +---v----+ +-v------+
+| SITE-01| | SITE-02| | SITE-03| | SITE-04| | SITE-05| | SITE-06|
++---+----+ +---+----+ +---+----+ +----+---+ +---+----+ +---+----+
+    |          |          |           |         |          |
+ (3 Cells)  (3 Cells)  (3 Cells)   (3 Cells) (3 Cells)  (3 Cells)
+ CELL-01..3 CELL-04..6 CELL-07..9  CELL-10..12 CELL-13..15 CELL-16..18
+```
+
+- **Core Tier**: 1 regional routing hub (`CORE-01`).
+- **Aggregation Tier**: 2 distribution routers (`AGG-01`, `AGG-02`).
+- **Site Tier**: 6 base station facilities (`SITE-01` to `SITE-06`).
+- **Cell Tier**: 18 radio sector units (`CELL-01` to `CELL-18`, 3 sectors per site).
+- **Transport Links**: 26 bidirectional transport dependencies linking parent nodes to child nodes.
+
+### 4.2 Composite KPI Snapshot
+
+Measurements for each node are captured as an immutable composite snapshot (`KPISnapshot`) containing:
+1. **Performance Metrics**: `throughput_mbps`, `latency_ms`.
+2. **Reliability Metrics**: `connection_drop_rate_pct`, `availability_pct`, `handover_success_rate_pct`.
+3. **Radio Metrics** (`CELL` tier only): `rsrp_dbm`, `sinr_db`, `prb_utilization_pct`.
+
+Snapshots are stored in an in-memory, thread-safe sliding buffer (`TelemetryStore`) indexed by `node_id` and timestamp, retaining up to 60 historical observations per node for statistical evaluations.
+
+---
+
+## 5. Fault Simulation and Detection
+
+### 5.1 Six Reference Fault Scenarios
+
+NEXUS includes six deterministic fault scenarios with precomputed ground truth and blast radius calculation:
+
+| Scenario Key | Fault Type | Target ID | Blast Radius | Primary Symptoms |
+| :--- | :--- | :--- | :--- | :--- |
+| `cell_outage` | `CELL_OUTAGE` | `CELL-01` | 1 node (`CELL-01`) | Throughput $\to 0$ Mbps, Availability $\to 0\%$, Drop rate $\to 100\%$. |
+| `backhaul_failure` | `BACKHAUL_FAILURE` | `LINK-AGG-01-SITE-01` | 4 nodes (`SITE-01`, `CELL-01`..`03`) | Complete communication loss across downstream branch (0 Mbps, 0% availability). |
+| `radio_interference`| `RADIO_INTERFERENCE` | `CELL-05` | 1 node (`CELL-05`) | Severe SINR collapse (< 5 dB), reduced throughput, elevated drops. |
+| `cell_congestion` | `CELL_CONGESTION` | `CELL-10` | 1 node (`CELL-10`) | PRB utilization spikes ($\ge 90\%$), queue latency spikes (> 80 ms). |
+| `site_power_failure`| `SITE_POWER_FAILURE` | `SITE-04` | 4 nodes (`SITE-04`, `CELL-10`..`12`) | Total facility power outage taking site and 3 sectors offline. |
+| `core_router_failure`| `CORE_ROUTER_FAILURE` | `CORE-01` | 1 node direct / Systemic | Regional transit degradation elevating latency and triggering availability alarms. |
+
+### 5.2 Anomaly Detection Engine
+
+- **Static Threshold Rules**: Point-in-time checks against operational bounds with hysteresis recovery thresholds to prevent alarm flapping.
+- **Statistical Baselines**:
+  - *Rolling Median & MAD*: Robust deviation scoring with minimum variance scale floors.
+  - *Recursive EWMA*: Exponential mean tracking with sample variance bounds.
+- **Evaluate-Then-Commit Policy**: Anomalous observations are excluded from historical baseline updates, preventing baseline contamination during active faults.
+- **Lifecycle Management**: Alarms follow an explicit state machine (`ACTIVE` $\to$ `CLEARED`), with immutable evidence structures and deterministic deduplication keys `(node_id, metric_name, rule_id, source)`.
+
+---
+
+## 6. Alarm Correlation and RCA
+
+### 6.1 Topology-Aware Alarm Correlation
+
+The correlation engine clusters active alarms using graph traversal:
+1. **Temporal Proximity**: Groups alarms occurring within a configurable sliding window (default: 300s).
+2. **Lowest Common Ancestor (LCA)**: Traverses the topology graph to find the nearest shared ancestor within a maximum hierarchy distance.
+3. **Distant Core Rejection**: Rejects merging independent aggregation branches into `CORE-01` unless an alarm exists directly on `CORE-01`, preventing unrelated branch failures from collapsing into a single cluster.
+4. **Symptom Compatibility**: Localized radio phenomena (`sinr_db`, `rsrp_dbm`, `prb_utilization_pct`) are restricted to single-node affinity, while systemic network metrics (`availability_pct`, `latency_ms`, `throughput_mbps`) correlate across parent-child links.
+
+### 6.2 Multi-Hypothesis Root Cause Analysis
+
+The RCA engine evaluates correlation clusters against deterministic diagnostic pattern evaluators:
+- Evaluates candidate hypotheses for each failure category (`BACKHAUL_FAILURE`, `SITE_POWER_FAILURE`, `RADIO_INTERFERENCE`, `CELL_CONGESTION`, `CELL_OUTAGE`).
+- Validates fresh telemetry observations relative to incident onset (discarding future information and stale snapshots).
+- Ranks candidate hypotheses by confidence score ($[0.0, 1.0]$), evidence item count, and deterministic tie-breakers.
+- Identifies suspect targets with explicit type semantics (`NODE` vs. `TRANSPORT_LINK`).
+- Emits an explicit `UNKNOWN` hypothesis with recommended tier-2 manual triage actions when evidence is insufficient.
+
+---
+
+## 7. Incident Management
+
+### 7.1 Incident Domain Entity & Persistence
+
+Correlated diagnostic clusters persist as durable operational incidents in PostgreSQL via SQLAlchemy 2.x and Alembic migrations:
+- **Deduplication**: Database-level unique constraint on `correlation_group_id`.
+- **Operational Severity Policy**: Severity (`CRITICAL`, `MAJOR`, `WARNING`, `MINOR`) and priority (`P1` to `P4`) are derived from affected node count and topology tier rather than diagnostic confidence alone.
+- **Lifecycle Transitions**: Enforces valid state machine transitions:
+  - `OPEN` $\to$ `ACKNOWLEDGED` $\to$ `RESOLVED`
+  - `OPEN` $\to$ `RESOLVED` (fast-path resolution)
+  - Duplicate transitions or modifying resolved incidents are rejected with HTTP 400.
+- **Append-Only Audit Timeline**: Every state change, actor attribution, and operational note is recorded as an immutable event in `incident_timeline_events`.
+
+### 7.2 SLA Tracking
+
+Configurable SLA targets enforce operational response windows:
+
+| Severity | Priority | Acknowledgement SLA | Resolution SLA |
+| :--- | :---: | :---: | :---: |
+| **CRITICAL** | P1 | 15 minutes | 60 minutes |
+| **MAJOR** | P2 | 30 minutes | 240 minutes (4 hours) |
+| **WARNING** | P3 | 60 minutes | 720 minutes (12 hours) |
+| **MINOR** | P4 | 120 minutes (2 hours) | 1440 minutes (24 hours) |
+
+SLA compliance status permanently freezes upon resolution, preventing retroactive breaches from subsequent clock advances. Operational metrics (MTTA, MTTR, MTTD) are computed using batched pagination in $O(1)$ memory without data truncation.
+
+---
+
+## 8. Real-Time Architecture
+
+NEXUS provides real-time state synchronization to connected operational clients:
+
+- **WebSocket Endpoint**: `WS /ws/live` delivering canonical JSON event envelopes:
+  ```json
+  {
+    "type": "TELEMETRY_SNAPSHOT",
+    "timestamp": "2026-11-23T12:00:00Z",
+    "payload": { ... }
+  }
+  ```
+- **Supported Event Types**: `TELEMETRY_SNAPSHOT`, `ALARM_CREATED`, `ALARM_UPDATED`, `ALARM_CLEARED`, `INCIDENT_CREATED`, `INCIDENT_ACKNOWLEDGED`, `INCIDENT_RESOLVED`, `TOPOLOGY_STATUS_CHANGED`.
+- **Concurrency & Backpressure**:
+  - Dedicated single outbound writer task per socket connection serializes frames, preventing concurrent write collisions.
+  - Cross-thread event dispatch uses `loop.call_soon_threadsafe()` to schedule queue insertions across thread boundaries.
+  - Bounded subscriber queues (`maxsize=100`) apply a FIFO drop policy for slow consumers to safeguard server memory.
+- **Client Resilience**: The frontend WebSocket client incorporates automatic exponential backoff reconnection and authoritative REST snapshot rehydration upon reconnect.
+
+---
+
+## 9. Observability
+
+### 9.1 Prometheus Metrics Catalog
+
+The FastAPI backend exposes Prometheus metrics on `/metrics`:
+- **HTTP Metrics**: `nexus_http_requests_total`, `nexus_http_request_duration_seconds`.
+- **Health & Readiness**: `nexus_app_info`, `nexus_ready_status`, `nexus_component_ready` (`topology`, `broadcaster`, `telemetry_store`, `alarm_service`, `fault_service`, `database`).
+- **Telemetry Averages**: `nexus_telemetry_throughput_mbps_avg`, `nexus_telemetry_latency_ms_avg`, `nexus_telemetry_availability_pct_avg`, `nexus_telemetry_drop_rate_pct_avg` (partitioned by `node_tier`).
+- **Alarm Metrics**: `nexus_alarms_active`, `nexus_alarms_total` (partitioned by `severity`).
+- **Incident & SLA Metrics**: `nexus_incidents_total`, `nexus_incidents_active`, `nexus_incidents_by_status`, `nexus_incidents_sla_breaches_total`, `nexus_incidents_mtta_seconds`, `nexus_incidents_mttr_seconds`, `nexus_incidents_sla_compliance_pct`.
+- **Fault Scenarios**: `nexus_fault_scenario_active` (labeled by `scenario_key`), `nexus_fault_affected_nodes_count`.
+
+### 9.2 Grafana Dashboards
+
+Five provisioned Grafana dashboards provide operational visualization:
+1. **System Health & HTTP Performance**: Request rate, latency percentiles, error rates.
+2. **Network Telemetry Overview**: Real-time throughput, latency, drop rates across the 27-node hierarchy.
+3. **Alarm Inventory & Activity**: Active alarms, severity breakdown, and alarm generation rates.
+4. **Incident & SLA Management**: MTTA, MTTR, SLA compliance rates, and breach tallies.
+5. **Fault Scenario Tracking**: Injected faults, affected blast radii, and recovery convergence.
+
+---
+
+## 10. Technology Stack
+
+### Backend
+- **Language**: Python 3.11+
+- **Framework**: FastAPI (asynchronous ASGI framework)
+- **Data Modeling**: Pydantic v2
+- **Persistence**: SQLAlchemy 2.x declarative ORM
+- **Database Migrations**: Alembic
+- **Relational Storage**: PostgreSQL 15 (production/container) with psycopg driver; SQLite (isolated testing)
+- **ASGI Server**: Uvicorn
+- **Metrics**: Prometheus Client library
+
+### Frontend
+- **Framework**: React 18 with Strict TypeScript
+- **Build Tool**: Vite 5.4.x
+- **Routing**: React Router v6
+- **Styling**: Tailwind CSS with custom Dark NOC tokens
+- **Icons**: Lucide React
+- **HTTP/WS**: Native fetch API with AbortController and native WebSocket client
+
+### Infrastructure & Operations
+- **Containerization**: Docker & Docker Compose v2
+- **Reverse Proxy**: Nginx (Alpine)
+- **Monitoring**: Prometheus v2.51.0
+- **Visualization**: Grafana 10.4.0
+
+---
+
+## 11. Deployment (Docker Compose)
+
+### 11.1 Quick Start
 
 ```bash
+# 1. Clone repository
+git clone https://github.com/shreysherikar/Nexus.git
+cd Nexus/nexus-network-intelligence
+
+# 2. Configure environment
 cp .env.example .env
-```
 
-Ensure `POSTGRES_PASSWORD` is configured in `.env`. Docker Compose enforces mandatory password validation and will halt startup if `POSTGRES_PASSWORD` is unset.
+# 3. Generate secure credentials in .env
+# Edit .env and set strong POSTGRES_PASSWORD and GRAFANA_ADMIN_PASSWORD
 
-### 2. Starting the Stack
-Build the production images and launch all four services in detached mode:
-
-```bash
+# 4. Launch multi-service stack
 docker compose up --build -d
-```
 
-### Security & Hardening Configuration
-- **Host Interface Isolation**: Host port mappings for backend (`8000`), frontend (`3000`), and Prometheus (`9090`) bind to loopback (`127.0.0.1`) by default, preventing unintended exposure to public or local area networks.
-- **Prometheus UI Exposure**: In production environments where host access to Prometheus UI is unnecessary, host binding can be disabled by unsetting `PROMETHEUS_PORT` or overriding port mappings.
-- **Metrics Access Restriction**: The frontend Nginx reverse proxy explicitly denies access to `/metrics` (returns 404), ensuring operational metrics are scraped strictly within the private Docker bridge network (`nexus-network`).
-- **Privilege Escalation Prevention**: All containers enforce `security_opt: [no-new-privileges:true]`. The backend process executes as an unprivileged non-root user (`nexus`, UID 1000).
-- **Information Disclosure Safeguards**: The `/ready` probe returns clean component operational status strings without leaking internal exception details, database connection URLs, or driver stack traces.
-
-### Service Startup Sequence & Automatic Migrations
-The deployment enforces strict dependency health checks:
-1. `postgres` starts and completes internal health checks (`pg_isready`).
-2. `backend` waits for PostgreSQL readiness via its `docker-entrypoint.sh` retry loop.
-3. Database migrations (`alembic upgrade head`) execute automatically before the backend starts Uvicorn as a non-root `nexus` user.
-4. Backend marks itself healthy once the `/ready` probe responds with HTTP 200.
-5. `frontend` (Nginx) launches and proxies client traffic to the healthy backend.
-6. `prometheus` launches and continuously scrapes `backend:8000/metrics` and `localhost:9090`.
-
-### Monitoring & Status Commands
-Check container status and health:
-```bash
+# 5. Check container health
 docker compose ps
 ```
 
-View aggregated service logs or follow a specific service:
-```bash
-docker compose logs -f
-docker compose logs -f backend
-docker compose logs -f frontend
-```
+### 11.2 Service Port Allocations
 
-Verify Prometheus target scraping:
-- Open `http://localhost:9090/targets` in your browser.
-- Verify `nexus-backend` (`http://backend:8000/metrics`) reports state `UP`.
+| Service | Container Name | Host Binding | Internal Port | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Frontend** | `nexus-frontend` | `127.0.0.1:3000` | `80` | NOC Web Dashboard & Nginx reverse proxy |
+| **Backend** | `nexus-backend` | `127.0.0.1:8000` | `8000` | FastAPI REST API and WebSocket server |
+| **Database** | `nexus-postgres` | None (internal) | `5432` | PostgreSQL relational database |
+| **Prometheus**| `nexus-prometheus`| `127.0.0.1:9090` | `9090` | Prometheus time-series metrics scraper |
+| **Grafana** | `nexus-grafana` | `127.0.0.1:3001` | `3000` | Grafana operational analytics dashboards |
 
-### Stopping the Stack
-Stop and remove containers while preserving persistent database and Prometheus volumes:
-```bash
-docker compose down
-```
+### 11.3 Security Hardening
 
-To stop containers and permanently purge persistent volumes:
-```bash
-docker compose down -v
-```
-
-### Troubleshooting
-- **Database Connection Retries**: If PostgreSQL takes a few seconds to initialize on first boot, the backend entrypoint retries up to 30 times with 2-second backoff.
-- **Port Conflicts**: Ensure host ports `3000`, `8000`, and `9090` are not in use by other applications before running `docker compose up`.
-- **Viewing Raw Migration Output**: If schema migration needs inspection, run `docker compose logs backend`.
+- All host ports bind strictly to loopback (`127.0.0.1`) by default.
+- Backend container runs as an unprivileged user (`nexus`, UID 1000).
+- Privilege escalation is disabled via `no-new-privileges:true`.
+- Public reverse proxy returns HTTP 404 for `/metrics`, keeping raw operational counters internal to the container network.
+- Probes (`/health`, `/ready`) sanitize error details and omit raw credentials or connection strings.
 
 ---
 
-## Local Setup & Quickstart
+## 12. Development and Testing
 
-### Prerequisites
-- **Python**: Version 3.11 or higher
-- **Node.js**: Version 18 or higher with `npm`
-- **Database (Optional)**: Docker Desktop / Docker Compose for PostgreSQL 15+ (SQLite fallback is automatically supported for lightweight local development)
-
-### 1. Install Dependencies
-Clone the repository and install the project in editable mode with all dependencies (including FastAPI, Uvicorn, SQLAlchemy, and test harnesses):
+### 12.1 Local Development Workflow
 
 ```bash
-git clone https://github.com/shreysherikar/Nexus.git
-cd Nexus/nexus-network-intelligence
-python -m pip install --upgrade pip
+# Setup Python virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[test]"
-```
 
-### 2. Configure Environment & Start Database
-Copy the example environment configuration:
+# Run backend development server (SQLite fallback)
+export ENVIRONMENT=development  # On Windows PowerShell: $env:ENVIRONMENT="development"
+python -m uvicorn nexus.main:app --host 127.0.0.1 --port 8000 --reload
 
-```bash
-cp .env.example .env
-```
-
-If using PostgreSQL, start the local PostgreSQL instance via Docker Compose:
-
-```bash
-docker compose up -d
-```
-
-*(Note: For offline or standalone development without Docker, setting `ENVIRONMENT=development` in your environment automatically initializes SQLite tables without external dependencies).*
-
-### 3. Apply Database Migrations
-Apply Alembic migrations to set up the incident management and timeline schema:
-
-```bash
-python -m alembic upgrade head
-```
-
-### 4. Start the REST API
-Launch the central FastAPI development server via Uvicorn:
-
-```bash
-python -m uvicorn nexus.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-- Interactive OpenAPI documentation: `http://localhost:8000/docs`
-- Health liveness probe: `http://localhost:8000/health`
-- Subsystem readiness probe: `http://localhost:8000/ready`
-- Live WebSocket event stream: `ws://localhost:8000/ws/live`
-
-### 5. Launch the Frontend NOC Dashboard
-Install frontend dependencies and start the Vite development server:
-
-```bash
+# In a separate terminal, run frontend Vite dev server
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-The NOC dashboard will be accessible at `http://localhost:3000`.
-
----
-
-## Running Tests
-
-### Backend Test Suite
-Execute the complete Python automated test suite from the repository root:
+### 12.2 Automated Test Execution
 
 ```bash
+# Backend pytest suite (557 tests across 17 test modules)
 python -m pytest -v
+
+# Frontend quality gates (from frontend/ directory)
+cd frontend
+npm run lint        # ESLint flat config
+npm run typecheck   # Strict TypeScript compiler check
+npm test            # Vitest suite (68 tests across 6 modules)
+npm run build       # Production bundle build
+cd ..
 ```
 
-### Frontend Test & Quality Suite
-Execute the frontend tests, linting, and typechecks from `frontend/`:
+### 12.3 End-to-End Acceptance Verification
+
+The automated acceptance test script evaluates end-to-end functionality against an isolated test database:
 
 ```bash
-cd frontend
-npm test            # Run Vitest component and client tests
-npm run lint        # Run ESLint quality checks
-npm run typecheck   # Run strict TypeScript compiler verification
-npm run build       # Build optimized production bundle
+python scripts/verify_e2e_acceptance.py
 ```
+
+The script verifies:
+- Database isolation (`nexus_test_db`, leaving `nexus_db` untouched).
+- Genuine WebSocket handshake, ping/pong, and `TELEMETRY_SNAPSHOT` event delivery.
+- All six reference fault scenarios with degradation assertions, RCA cause/target matching, and recovery convergence.
+- Prometheus scrape status and Grafana panel query execution.
 
 ---
 
-## Project Documentation
+## 13. API and Technical Documentation
 
-Detailed architectural decisions and design specifications are documented in `docs/`:
+Comprehensive documentation is available in the [`docs/`](docs/) directory:
 
-- [System Architecture & Initial Design](docs/architecture/initial-design.md)
-- [Telemetry & KPI Domain Design](docs/architecture/telemetry-kpi-design.md)
-- [Fault Injection & Scenario Engine Design](docs/architecture/fault-injection-design.md)
-- [Anomaly Detection & Alarm Generation Design](docs/architecture/anomaly-detection-design.md)
-- [Alarm Correlation & RCA Design](docs/architecture/alarm-correlation-rca-design.md)
-- [Incident Management & SLA Tracking Design](docs/architecture/incident-management-design.md)
-- [Frontend NOC Dashboard Architecture (M7.1)](docs/architecture/frontend-noc-architecture.md)
-- [ADR-001: Modular Project Architecture](docs/decisions/ADR-001-project-architecture.md)
+- **[System Overview](docs/architecture/system-overview.md)**: Architectural purpose, topology hierarchy, and end-to-end data pipeline.
+- **[Telemetry & KPI Model](docs/architecture/telemetry-and-kpi-model.md)**: Metric definitions, operational baselines, and synthetic generation.
+- **[Anomaly Detection](docs/architecture/anomaly-detection.md)**: Threshold rules, hysteresis, statistical detectors, and alarm lifecycle.
+- **[Alarm Correlation & RCA](docs/architecture/alarm-correlation-and-rca.md)**: LCA correlation algorithms, multi-hypothesis ranking, and evidence attribution.
+- **[Incident Management](docs/architecture/incident-management.md)**: Relational schema, severity policies, SLA tracking, and audit timeline.
+- **[Fault Simulation](docs/architecture/fault-simulation.md)**: Scenario engine, the six reference scenarios, and recovery verification.
+- **[Frontend Architecture](docs/architecture/frontend-architecture.md)**: React/Vite architecture, Dark NOC design tokens, and WebSocket client.
+- **[API & WebSocket Specification](docs/api-and-websocket.md)**: Complete REST API reference and WebSocket protocol contracts.
+- **[Database Schema & Migrations](docs/database-schema-migrations.md)**: Relational models and Alembic migration procedures.
+- **[Observability Deployment](docs/observability-deployment.md)**: Prometheus metrics, PromQL queries, and container hardening.
+- **[Operations Runbook](docs/operations-runbook.md)**: Operational verification checklist, fault injection procedures, and troubleshooting.
+- **[Testing & Verification Strategy](docs/testing-verification.md)**: Test catalog, execution commands, and CI workflows.
+- **[ADR-001: Project Architecture](docs/decisions/ADR-001-project-architecture.md)**: Architectural Decision Record for the modular monolithic design.
+
+---
+
+## 14. Scope and Limitations
+
+NEXUS is an engineering simulation and operations platform. The following operational boundaries and assumptions apply:
+
+1. **Synthetic Telemetry**: All metrics and device states are synthetically modeled. Real-world 3GPP protocol state machines (e.g., GTP-U tunnel negotiation, RRC state transitions) are represented via aggregate high-level KPIs.
+2. **Deterministic Heuristic RCA**: Root Cause Analysis uses explainable, deterministic rule-based algorithms with Lowest Common Ancestor graph traversal and evidence scoring. It does not use neural networks or black-box machine learning models.
+3. **Fixed Reference Topology**: The core system models a 27-node reference network (1 Core, 2 Aggregation, 6 Sites, 18 Cells) designed for deterministic reproducibility.
+4. **In-Memory Telemetry Storage**: Telemetry snapshots are retained in an ephemeral in-memory sliding buffer (`TelemetryStore`) and are not persisted across backend restarts. Historical persistence is dedicated to Incidents, Alarms, and Audit Timelines in PostgreSQL.
+5. **Authentication & Authorization**: REST API endpoints and WebSocket channels operate in an open operational mode without OAuth2/JWT or Role-Based Access Control (RBAC). In production deployments, authentication must be enforced via an external API gateway or mutual TLS reverse proxy.
+
+---
+
+## 15. License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.

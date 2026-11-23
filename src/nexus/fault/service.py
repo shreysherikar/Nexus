@@ -74,6 +74,16 @@ SCENARIO_METADATA: dict[str, dict[str, Any]] = {
         "default_offset_minutes": 20,
         "default_duration_minutes": 25,
     },
+    "core_router_failure": {
+        "scenario_id": "SCENARIO-CORE-FAIL-01",
+        "name": "Core Router Failure",
+        "description": "Central core router failure on CORE-01 collapsing connectivity and availability across the entire network.",
+        "target_id": "CORE-01",
+        "fault_type": FaultType.CORE_ROUTER_FAILURE,
+        "severity": 1.0,
+        "default_offset_minutes": 5,
+        "default_duration_minutes": 15,
+    },
 }
 
 
@@ -220,6 +230,17 @@ class FaultService:
             self._activated_at = now
 
             resp = self.get_active_scenario()
+
+            try:
+                from nexus.metrics import get_metrics_manager
+                mgr = get_metrics_manager()
+                if hasattr(mgr, "fault_injections_total"):
+                    mgr.fault_injections_total.labels(
+                        scenario_id=meta["scenario_id"],
+                        fault_type=meta["fault_type"].value,
+                    ).inc()
+            except Exception:
+                pass
 
             self._publish(
                 "FAULT_STATUS_CHANGED",

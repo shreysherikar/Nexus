@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Bell,
   Filter,
+  FolderPlus,
   RefreshCw,
   Search,
+  ShieldAlert,
   X,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -36,6 +38,79 @@ export const AlarmsPage: React.FC = () => {
 
   // Selected Alarm Drawer
   const [selectedAlarm, setSelectedAlarm] = useState<AlarmResponse | null>(null);
+
+  // Multi-alarm Selection & Promotion to Incident
+  const [selectedAlarmIds, setSelectedAlarmIds] = useState<string[]>([]);
+  const [promoteInProgress, setPromoteInProgress] = useState(false);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
+  const [promoteSuccess, setPromoteSuccess] = useState<string | null>(null);
+
+  const handleToggleSelectAlarm = (alarmId: string) => {
+    setSelectedAlarmIds((prev) =>
+      prev.includes(alarmId) ? prev.filter((id) => id !== alarmId) : [...prev, alarmId]
+    );
+  };
+
+  const handleSelectAllCurrentPage = () => {
+    if (selectedAlarmIds.length === alarms.length) {
+      setSelectedAlarmIds([]);
+    } else {
+      setSelectedAlarmIds(alarms.map((a) => a.alarm_id));
+    }
+  };
+
+  const handlePromoteToIncident = async () => {
+    const selectedAlarms = alarms.filter((a) => selectedAlarmIds.includes(a.alarm_id));
+    if (selectedAlarms.length === 0) return;
+
+    setPromoteInProgress(true);
+    setPromoteError(null);
+    setPromoteSuccess(null);
+
+    try {
+      const anchorNode = selectedAlarms[0].node_id;
+      const groupId = `CORR-${anchorNode}-${Date.now().toString(36).toUpperCase()}`;
+
+      const alarmDtos = selectedAlarms.map((a) => ({
+        alarm_id: a.alarm_id,
+        node_id: a.node_id,
+        rule_id: a.rule_id,
+        metric_name: a.metric_name,
+        source: a.source,
+        severity: a.severity,
+        current_value: a.current_value,
+        threshold: a.threshold,
+        first_seen: a.first_seen,
+        last_seen: a.last_seen,
+        observation_count: a.observation_count,
+        status: a.status,
+      }));
+
+      const newInc = await apiClient.createIncident({
+        correlation_group_id: groupId,
+        anchor_node_id: anchorNode,
+        alarms: alarmDtos,
+        time_window_start: selectedAlarms.reduce(
+          (min, a) => (a.first_seen < min ? a.first_seen : min),
+          selectedAlarms[0].first_seen
+        ),
+        time_window_end: selectedAlarms.reduce(
+          (max, a) => (a.last_seen > max ? a.last_seen : max),
+          selectedAlarms[0].last_seen
+        ),
+        correlation_reason: `Operator promoted ${selectedAlarms.length} alarm(s) to operational incident on ${anchorNode}`,
+        suspected_target_id: anchorNode,
+        suspected_target_type: 'NODE',
+      });
+
+      setPromoteSuccess(`Successfully promoted alarms into Incident ${newInc.incident_id}`);
+      setSelectedAlarmIds([]);
+    } catch (err: unknown) {
+      setPromoteError(err instanceof Error ? err.message : 'Failed to promote alarms to incident');
+    } finally {
+      setPromoteInProgress(false);
+    }
+  };
 
   const fetchAlarms = useCallback(async () => {
     setLoading(true);
@@ -116,6 +191,28 @@ export const AlarmsPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
   const columns = [
+    {
+      key: 'select',
+      header: (
+        <input
+          type="checkbox"
+          aria-label="Select all alarms"
+          checked={alarms.length > 0 && selectedAlarmIds.length === alarms.length}
+          onChange={handleSelectAllCurrentPage}
+          className="rounded bg-noc-base border-noc-border text-blue-500 focus:ring-0 cursor-pointer"
+        />
+      ),
+      render: (a: AlarmResponse) => (
+        <input
+          type="checkbox"
+          aria-label={`Select alarm ${a.alarm_id}`}
+          checked={selectedAlarmIds.includes(a.alarm_id)}
+          onChange={() => handleToggleSelectAlarm(a.alarm_id)}
+          onClick={(e) => e.stopPropagation()}
+          className="rounded bg-noc-base border-noc-border text-blue-500 focus:ring-0 cursor-pointer"
+        />
+      ),
+    },
     {
       key: 'alarm_id',
       header: 'Alarm ID',
@@ -203,16 +300,51 @@ export const AlarmsPage: React.FC = () => {
         description="Threshold and statistical anomaly detection alarms emitted by the NEXUS detection engine."
         breadcrumbs={[{ label: 'NOC' }, { label: 'Alarms' }]}
         actions={
-          <button
-            onClick={fetchAlarms}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-noc-surface border border-noc-border hover:bg-noc-surface-hover text-xs font-medium text-noc-text-primary transition disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            {selectedAlarmIds.length > 0 && (
+              <button
+                onClick={handlePromoteToIncident}
+                disabled={promoteInProgress}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-xs font-semibold text-white shadow-sm transition disabled:opacity-50"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+                {promoteInProgress
+                  ? 'Promoting...'
+                  : `Promote ${selectedAlarmIds.length} to Incident`}
+              </button>
+            )}
+            <button
+              onClick={fetchAlarms}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-noc-surface border border-noc-border hover:bg-noc-surface-hover text-xs font-medium text-noc-text-primary transition disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         }
       />
+
+      {promoteSuccess && (
+        <div className="mb-6 p-4 rounded-lg bg-emerald-950/40 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-300">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-emerald-400" />
+            <span>{promoteSuccess}</span>
+          </div>
+          <Link
+            to="/incidents"
+            className="px-2.5 py-1 rounded bg-emerald-800/50 hover:bg-emerald-700/50 text-white font-mono transition"
+          >
+            View in Incidents Workspace &rarr;
+          </Link>
+        </div>
+      )}
+
+      {promoteError && (
+        <div className="mb-6 p-3 rounded bg-red-950/40 border border-red-500/30 text-xs text-red-300 font-mono">
+          {promoteError}
+        </div>
+      )}
 
       {error && (
         <div className="mb-6">

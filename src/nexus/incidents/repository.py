@@ -274,6 +274,20 @@ class IncidentRepository:
                 record.status = incident.status.value
                 record.severity = incident.severity.value
                 record.priority = incident.priority.value
+                record.title = incident.title
+                record.description = incident.description
+                record.alarm_ids = list(incident.alarm_ids)
+                record.affected_node_ids = list(incident.affected_node_ids)
+                record.suspected_cause_type = (
+                    incident.suspected_cause_type.value if incident.suspected_cause_type else None
+                )
+                record.suspected_target_id = incident.suspected_target_id
+                record.suspected_target_type = (
+                    incident.suspected_target_type.value if incident.suspected_target_type else None
+                )
+                record.rca_confidence_score = incident.rca_confidence_score
+                record.rca_hypotheses = [dict(h) for h in incident.rca_hypotheses]
+                record.rca_evidence = [dict(e) for e in incident.rca_evidence]
                 record.acknowledged_at = incident.acknowledged_at
                 record.acknowledged_by = incident.acknowledged_by
                 record.resolved_at = incident.resolved_at

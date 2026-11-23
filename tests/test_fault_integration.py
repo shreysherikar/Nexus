@@ -72,7 +72,7 @@ class TestFaultIntegrationEndToEnd:
         resp = client.get("/api/v1/faults/scenarios")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 5
+        assert data["total"] == 6
         items = {item["id"]: item for item in data["items"]}
 
         # 1. Cell Outage

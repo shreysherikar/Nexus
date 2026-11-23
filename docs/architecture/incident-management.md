@@ -1,10 +1,10 @@
-# NEXUS Architecture: Incident Management & SLA Tracking (Milestone 6)
+# NEXUS Incident Management & SLA Tracking
 
-## 1. Executive Summary
+## 1. Overview and Architectural Purpose
 
-Milestone 6 introduces the persistent Incident Management & SLA Tracking subsystem for NEXUS (Network Intelligence & Incident Management Platform). Building upon the alarm correlation and Root Cause Analysis (RCA) engine delivered in Milestone 5, this subsystem converts correlated alarm clusters and explainable diagnostic hypotheses into durable, auditable, and actionable operational incidents.
+The `nexus.incident` package provides persistent incident management and SLA tracking for the NEXUS platform. Building upon the alarm correlation and Root Cause Analysis (RCA) engine, this subsystem converts correlated alarm clusters and explainable diagnostic hypotheses into durable, auditable, and actionable operational incidents.
 
-The subsystem exposes a REST API powered by FastAPI, transactional persistence via SQLAlchemy 2.x and Alembic schema migrations targeting PostgreSQL, timezone-safe SLA calculation, an append-only audit timeline, and operational incident metrics (MTTD, MTTA, MTTR).
+The subsystem exposes a typed REST API powered by FastAPI, transactional persistence via SQLAlchemy 2.x and Alembic schema migrations targeting PostgreSQL, timezone-safe SLA calculation, an append-only audit timeline, and operational incident metrics (MTTD, MTTA, MTTR).
 
 ---
 
@@ -43,7 +43,7 @@ The core incident domain entity is implemented as a validated, immutable-friendl
 ```
 
 ### Key Domain Principles:
-- **Zero Ground-Truth Leakage**: Incidents are generated strictly from observable correlation groups and RCA results, without accessing fault injection ground truth.
+- **Zero Ground-Truth Leakage**: Incidents are generated strictly from observable correlation groups and RCA results, without accessing fault simulation ground truth.
 - **Handling UNKNOWN RCA Results**: If the diagnostic engine yields `UNKNOWN` or no primary hypothesis, the incident is successfully created with `suspected_cause_type = RootCauseType.UNKNOWN` and unverified root cause description.
 - **Timezone Normalization**: All timestamps are converted to and stored in UTC.
 
@@ -157,8 +157,7 @@ All operational events are captured as append-only records in `incident_timeline
 
 ### Guarantees & Lifecycle Semantics:
 - **Application-Level Append-Only Guarantee**: In the domain and application service layers, the timeline is strictly append-only. Lifecycle transitions (`CREATED`, `ACKNOWLEDGED`, `RESOLVED`) only insert new immutable `TimelineEvent` records. No API or service methods exist to modify, update, or delete individual historical timeline events.
-- **Database-Level Cascade-Delete Behavior**: The database foreign key on `incident_timeline_events.incident_id` references `incidents.incident_id` with `ondelete="CASCADE"`. Deleting a parent incident record cascades to remove its associated timeline events, maintaining relational hygiene and preventing orphaned audit records.
-- **Database-Level Immutability Boundary**: Immutability is enforced at the application service and transaction boundary; database-level SQL triggers (e.g., `BEFORE UPDATE OR DELETE` disallowing row modification) are not implemented, leaving cascade-delete and administrative maintenance viable.
+- **Database-Level Cascade-Delete Behavior**: The database foreign key on `incident_timeline_events.incident_id` references `incidents.incident_id` with `ondelete="CASCADE"`. Deleting a parent incident record cascades to remove its associated timeline events, maintaining relational hygiene.
 - **Atomicity**: Changes to incident state and corresponding timeline events are committed within the same database transaction.
 - **Deterministic Ordering**: Timeline history is ordered chronologically by `timestamp ASC`.
 
@@ -188,30 +187,30 @@ Persistence is implemented using SQLAlchemy 2.x declarative models and Alembic d
   - At runtime, the service layer inspects the schema and raises a descriptive `RuntimeError` if the database is unmigrated, preventing silent failures or inconsistent states.
   - Enforces database-level uniqueness on `correlation_group_id` and relational foreign-key integrity.
 - **SQLite (Development & Offline Testing)**:
-  - Fully supported for local unit testing and zero-setup offline development with `StaticPool` and JSON compatibility.
-  - Development mode supports automatic schema creation (`metadata.create_all`) when using SQLite, allowing instant local testing without manual database bootstrapping.
+  - Supported for local unit testing and zero-setup offline development with `StaticPool` and JSON compatibility.
+  - Development mode supports automatic schema creation (`metadata.create_all`) when using SQLite.
 - **Idempotency**: A database-level unique constraint on `correlation_group_id` prevents duplicate incidents even under concurrent creation attempts.
 
 ---
 
-## 7.1 Data Ingestion & Streaming Metrics Architecture
+## 8. Data Ingestion & Streaming Metrics Architecture
 
 ### Actual Alarm Ingestion Model:
-Incidents are created from actual correlation and RCA results using validated `CorrelatedAlarmDTO` structures rather than fabricated placeholder data:
+Incidents are created from actual correlation and RCA results using validated `CorrelatedAlarmDTO` structures rather than placeholder data:
 - Every alarm retains its actual `alarm_id`, `node_id`, `rule_id`, `metric_name`, `source`, `severity`, `current_value`, `threshold`, `first_seen`, `last_seen`, `observation_count`, and `status`.
 - The `OperationalSeverityPolicy` evaluates genuine alarm severities (`CRITICAL`, `MAJOR`, `WARNING`) and affected node counts, ensuring accurate operational prioritization.
-- Requests with incomplete or missing alarm data are rejected with HTTP 422 rather than synthesized.
-- Diagnostic confidence scores are strictly validated as finite floats in $[0.0, 1.0]$ (rejecting booleans, NaN, and infinity) and are preserved as `None` when unavailable, completely avoiding invented confidence defaults.
+- Requests with incomplete or missing alarm data are rejected with HTTP 422.
+- Diagnostic confidence scores are strictly validated as finite floats in $[0.0, 1.0]$ and preserved as `None` when unavailable.
 
-### Streaming Metrics Beyond 10,000 Incidents:
+### Streaming Metrics:
 To support large-scale operational environments without memory exhaustion or data truncation:
 - Metrics computation utilizes streaming batched pagination (`iter_all_incidents(batch_size=2000)`).
 - The `MetricsCalculator` consumes an `Iterable[Incident]` and computes running sums and counts in $O(1)$ memory.
-- There is zero artificial truncation (removing the previous 10,000-incident limit), ensuring all persisted historical records accurately contribute to MTTA, MTTR, open counts, and SLA breach tallies.
+- There is zero artificial truncation, ensuring all persisted historical records accurately contribute to MTTA, MTTR, open counts, and SLA breach tallies.
 
 ---
 
-## 8. REST API Architecture
+## 9. REST API Architecture
 
 A FastAPI application exposes versioned REST endpoints under `/api/v1`:
 
@@ -225,17 +224,17 @@ GET    /api/v1/incidents/{incident_id}/timeline    -> Retrieve chronological aud
 GET    /api/v1/incidents/metrics         -> Retrieve operational incident & SLA metrics (200 OK)
 ```
 
-### Standardized Status Codes & Responses:
+### Standardized Status Codes:
 - `200 OK`: Successful retrieval or lifecycle update.
 - `201 Created`: Incident successfully created.
-- `400 Bad Request`: Illegal lifecycle transition (e.g. resolving twice).
+- `400 Bad Request`: Illegal lifecycle transition (e.g., resolving twice).
 - `404 Not Found`: Incident ID does not exist.
 - `409 Conflict`: Duplicate incident for correlation group.
 - `422 Unprocessable Entity`: Request validation failure.
 
 ---
 
-## 9. Operational Metrics Definitions
+## 10. Operational Metrics Definitions
 
 The `MetricsCalculator` computes operational KPIs across incidents:
 
@@ -247,20 +246,17 @@ The `MetricsCalculator` computes operational KPIs across incidents:
    Strictly calculated across resolved incidents. Active/unresolved incidents are excluded to avoid skewing completion averages.
 3. **MTTD (Mean Time To Detect)**:
    $$\text{MTTD} = \frac{1}{N_{\text{detected}}} \sum_{i=1}^{N_{\text{detected}}} (\text{first\_detection\_time}_i - \text{fault\_onset}_i)$$
-   Derived strictly from detection evaluation data. Reported as `None` when detection onset data is absent, avoiding arbitrary heuristics.
+   Derived strictly from detection evaluation data. Reported as `None` when detection onset data is absent.
 4. **Open Incident Count**: Total incidents in `OPEN` or `ACKNOWLEDGED` status.
 5. **Breach Counts**: Separate counters for acknowledgement SLA breaches and resolution SLA breaches.
 
 ---
 
-## 10. Security & Operational Limitations
+## 11. Security & Operational Limitations
 
 - **Authentication & Authorization**: The API does not enforce token-based authentication (OAuth2 / JWT) or role-based access control (RBAC). In a production environment, API gateway authentication or reverse-proxy mutual TLS must front `/api/v1`.
 - **Concurrency & Locking**: 
   - Service and database uniqueness constraints guard against duplicate creation for the same correlation group.
-  - Updates to existing incidents follow a transactional atomic model but operate on a last-write-wins basis; optimistic concurrency locking (such as version tokens or HTTP ETags) is deferred to future multi-operator collaboration milestones.
-- **Timeline Immutability Guarantees**:
-  - The append-only behavior is guaranteed at the application domain and service layer through validated state transitions that insert new events without modifying or overwriting past events.
-  - At the database level, timeline events are protected by foreign-key relationships and cascade policies; database-level immutability triggers (disallowing `UPDATE` and `DELETE` on `incident_timeline_events` via SQL triggers) are deferred for enterprise hardening.
+  - Updates to existing incidents follow a transactional atomic model on a last-write-wins basis.
 - **MTTD Availability**:
-  - Mean Time to Detect (MTTD) is derived strictly from benchmark detection evaluation records correlating injected fault onset to first alert. When metrics are requested without detection evaluation records (e.g. standalone incident tracking), MTTD is explicitly returned as `None` rather than inventing an arbitrary baseline.
+  - Mean Time to Detect (MTTD) is derived strictly from benchmark detection evaluation records correlating injected fault onset to first alert. When metrics are requested without detection evaluation records (e.g., standalone incident tracking), MTTD is explicitly returned as `None` rather than inventing an arbitrary baseline.

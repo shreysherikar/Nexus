@@ -200,6 +200,246 @@ class IncidentService:
         )
         return persisted
 
+    def create_or_update_incident(
+        self,
+        correlation_group: CorrelationGroup,
+        rca_result: Optional[RCAResult] = None,
+        actor: str = "SYSTEM",
+        creation_timestamp: Optional[datetime] = None,
+    ) -> tuple[Incident, bool]:
+        """Create a new incident or update an existing active incident for this failure cluster.
+
+        Deduplication Guarantees:
+        - Never creates duplicate incidents for repeated alarms belonging to the same active failure cluster.
+        - First, checks if an incident exists for correlation_group.group_id.
+        - If not, queries active incidents (OPEN or ACKNOWLEDGED) and matches against shared alarm IDs
+          or identical anchor node and overlapping affected nodes.
+        - When an active matching incident exists:
+          * Merges new alarm IDs and affected node IDs.
+          * Re-evaluates severity and upgrades if operational impact increases.
+          * Updates RCA hypotheses, evidence, and suspected cause when new analysis is provided.
+          * Appends appropriate timeline events (SEVERITY_CHANGED or NOTE_ADDED).
+          * Atomically persists updates and broadcasts INCIDENT_UPDATED.
+          * Returns (updated_incident, False).
+        - When no active matching incident exists:
+          * Calls create_incident() to persist the new incident.
+          * Returns (created_incident, True).
+        """
+        now = (
+            _normalize_utc_timestamp("creation_timestamp", creation_timestamp)
+            if creation_timestamp
+            else datetime.now(timezone.utc)
+        )
+
+        # 1. Exact match by correlation group ID
+        existing = self._repo.get_by_correlation_group_id(correlation_group.group_id)
+
+        # 2. If no exact group_id match, look for an active incident covering this failure cluster
+        if existing is None:
+            group_alarm_set = set(correlation_group.alarm_ids)
+            group_node_set = set(correlation_group.node_ids)
+
+            open_incidents, _ = self._repo.list_incidents(status=IncidentStatus.OPEN, limit=100)
+            ack_incidents, _ = self._repo.list_incidents(status=IncidentStatus.ACKNOWLEDGED, limit=100)
+            active_incidents = open_incidents + ack_incidents
+
+            for candidate in active_incidents:
+                # Check overlapping alarms with matching target or anchor
+                primary_target = (
+                    rca_result.primary_hypothesis.target_id
+                    if (rca_result and rca_result.primary_hypothesis)
+                    else None
+                )
+                if (
+                    group_alarm_set
+                    and (group_alarm_set & set(candidate.alarm_ids))
+                    and (
+                        not candidate.suspected_target_id
+                        or candidate.suspected_target_id == correlation_group.anchor_node_id
+                        or (primary_target and candidate.suspected_target_id == primary_target)
+                    )
+                ):
+                    existing = candidate
+                    break
+
+                # Check shared anchor node / suspected target with overlapping affected nodes
+                if (
+                    correlation_group.anchor_node_id
+                    and candidate.suspected_target_id == correlation_group.anchor_node_id
+                    and (group_node_set & set(candidate.affected_node_ids))
+                ):
+                    existing = candidate
+                    break
+
+        # 3. If an active incident is found, update it
+        if existing is not None and existing.status in (IncidentStatus.OPEN, IncidentStatus.ACKNOWLEDGED):
+            new_alarm_ids = set(correlation_group.alarm_ids) - set(existing.alarm_ids)
+            merged_alarm_ids = tuple(sorted(set(existing.alarm_ids) | set(correlation_group.alarm_ids)))
+            merged_node_ids = tuple(sorted(set(existing.affected_node_ids) | set(correlation_group.node_ids)))
+
+            # Evaluate severity
+            new_severity = self._severity_policy.evaluate(correlation_group)
+            sev_rank = {
+                IncidentSeverity.CRITICAL: 4,
+                IncidentSeverity.MAJOR: 3,
+                IncidentSeverity.WARNING: 2,
+                IncidentSeverity.MINOR: 1,
+            }
+            existing_rank = sev_rank.get(existing.severity, 0)
+            new_rank = sev_rank.get(new_severity, 0)
+
+            severity_upgraded = new_rank > existing_rank
+            effective_severity = new_severity if severity_upgraded else existing.severity
+            effective_priority = self._severity_policy.get_priority(effective_severity)
+
+            # Determine updated RCA details
+            effective_cause = existing.suspected_cause_type
+            effective_target_id = existing.suspected_target_id
+            effective_target_type = existing.suspected_target_type
+            effective_confidence = existing.rca_confidence_score
+            effective_hypotheses = existing.rca_hypotheses
+            effective_evidence = existing.rca_evidence
+            effective_title = existing.title
+            effective_desc = existing.description
+
+            if rca_result is not None:
+                primary = rca_result.primary_hypothesis
+                should_update_rca = (
+                    existing.suspected_cause_type in (None, RootCauseType.UNKNOWN)
+                    or (primary is not None and (primary.confidence_score or 0.0) > (existing.rca_confidence_score or 0.0))
+                    or len(existing.rca_hypotheses) == 0
+                )
+                if should_update_rca:
+                    if primary is not None:
+                        effective_cause = primary.cause_type
+                        effective_target_id = primary.target_id
+                        effective_target_type = primary.target_type
+                        effective_confidence = (
+                            round(float(primary.confidence_score), 4)
+                            if primary.confidence_score is not None
+                            else None
+                        )
+                        effective_title = f"[{effective_severity.value}] {effective_cause.value} on {effective_target_id}"
+                        effective_desc = primary.explanation
+                    effective_hypotheses = tuple(
+                        {
+                            "hypothesis_id": h.hypothesis_id,
+                            "cause_type": h.cause_type.value,
+                            "target_id": h.target_id,
+                            "target_type": h.target_type.value,
+                            "confidence_score": h.confidence_score,
+                            "explanation": h.explanation,
+                        }
+                        for h in rca_result.hypotheses
+                    )
+                    if primary is not None:
+                        effective_evidence = tuple(
+                            {
+                                "source_node_id": ev.source_node_id,
+                                "metric_name": ev.metric_name,
+                                "observed_value": ev.observed_value,
+                                "threshold_or_baseline": ev.threshold_or_baseline,
+                                "reasoning": ev.reasoning,
+                                "severity": ev.severity.value if ev.severity else None,
+                                "evidence_source": ev.evidence_source,
+                            }
+                            for ev in primary.evidence_items
+                        )
+
+            # Timeline events
+            new_events: list[TimelineEvent] = []
+            if severity_upgraded:
+                new_events.append(
+                    TimelineEvent(
+                        event_id=_generate_id("EVT"),
+                        incident_id=existing.incident_id,
+                        event_type=TimelineEventType.SEVERITY_CHANGED,
+                        timestamp=now,
+                        actor=actor,
+                        actor_type=ActorType.SYSTEM,
+                        details={
+                            "previous_severity": existing.severity.value,
+                            "new_severity": effective_severity.value,
+                            "reason": f"Merged {len(new_alarm_ids)} new alarm(s) escalated impact.",
+                        },
+                    )
+                )
+            elif new_alarm_ids:
+                new_events.append(
+                    TimelineEvent(
+                        event_id=_generate_id("EVT"),
+                        incident_id=existing.incident_id,
+                        event_type=TimelineEventType.NOTE_ADDED,
+                        timestamp=now,
+                        actor=actor,
+                        actor_type=ActorType.SYSTEM,
+                        details={
+                            "note": f"Correlated {len(new_alarm_ids)} additional active alarm(s).",
+                            "new_alarm_ids": list(new_alarm_ids),
+                        },
+                    )
+                )
+
+            updated = Incident(
+                incident_id=existing.incident_id,
+                correlation_group_id=existing.correlation_group_id,
+                status=existing.status,
+                severity=effective_severity,
+                priority=effective_priority,
+                title=effective_title,
+                description=effective_desc,
+                alarm_ids=merged_alarm_ids,
+                affected_node_ids=merged_node_ids,
+                suspected_cause_type=effective_cause,
+                suspected_target_id=effective_target_id,
+                suspected_target_type=effective_target_type,
+                rca_confidence_score=effective_confidence,
+                rca_hypotheses=effective_hypotheses,
+                rca_evidence=effective_evidence,
+                created_at=existing.created_at,
+                ack_deadline=existing.ack_deadline,
+                resolve_deadline=existing.resolve_deadline,
+                acknowledged_at=existing.acknowledged_at,
+                acknowledged_by=existing.acknowledged_by,
+                resolved_at=existing.resolved_at,
+                resolved_by=existing.resolved_by,
+                timeline=existing.timeline + tuple(new_events),
+            )
+
+            persisted = self._repo.update(updated)
+            self._publish(
+                "INCIDENT_UPDATED",
+                {
+                    "incident_id": persisted.incident_id,
+                    "status": persisted.status.value,
+                    "severity": persisted.severity.value,
+                    "priority": persisted.priority.value,
+                    "title": persisted.title,
+                    "correlation_group_id": persisted.correlation_group_id,
+                    "affected_node_ids": list(persisted.affected_node_ids),
+                    "alarm_count": len(persisted.alarm_ids),
+                },
+            )
+            return persisted, False
+
+        # 4. Otherwise create a brand new incident
+        if rca_result is None:
+            rca_result = RCAResult(
+                group_id=correlation_group.group_id,
+                hypotheses=(),
+                primary_hypothesis=None,
+                analysis_timestamp=now,
+                recommended_action="Perform diagnostic triage.",
+            )
+
+        new_incident = self.create_incident(
+            correlation_group=correlation_group,
+            rca_result=rca_result,
+            actor=actor,
+            creation_timestamp=now,
+        )
+        return new_incident, True
+
     def acknowledge_incident(
         self,
         incident_id: str,

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import threading
 from typing import Any, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 from nexus.telemetry.generator import SyntheticTelemetryGenerator
 from nexus.telemetry.models import KPISnapshot
@@ -30,11 +33,17 @@ class TelemetryPipeline:
         store: TelemetryStore,
         fault_service: Optional[Any] = None,
         alarm_service: Optional[Any] = None,
+        correlation_engine: Optional[Any] = None,
+        rca_engine: Optional[Any] = None,
+        incident_service: Optional[Any] = None,
     ) -> None:
         self._generator = generator
         self._store = store
         self._fault_service = fault_service
         self._alarm_service = alarm_service
+        self._correlation_engine = correlation_engine
+        self._rca_engine = rca_engine
+        self._incident_service = incident_service
 
     @property
     def generator(self) -> SyntheticTelemetryGenerator:
@@ -57,6 +66,33 @@ class TelemetryPipeline:
 
     def set_alarm_service(self, alarm_service: Optional[Any]) -> None:
         self._alarm_service = alarm_service
+
+    @property
+    def correlation_engine(self) -> Optional[Any]:
+        return self._correlation_engine
+
+    def set_correlation_engine(self, correlation_engine: Optional[Any]) -> None:
+        self._correlation_engine = correlation_engine
+
+    @property
+    def rca_engine(self) -> Optional[Any]:
+        return self._rca_engine
+
+    def set_rca_engine(self, rca_engine: Optional[Any]) -> None:
+        self._rca_engine = rca_engine
+
+    @property
+    def incident_service(self) -> Optional[Any]:
+        if self._incident_service is None:
+            try:
+                from nexus.incidents.api import get_incident_service
+                return get_incident_service()
+            except Exception:
+                return None
+        return self._incident_service
+
+    def set_incident_service(self, incident_service: Optional[Any]) -> None:
+        self._incident_service = incident_service
 
     def generate_step(self, timestamp: Optional[datetime] = None) -> list[KPISnapshot]:
         """Generate a complete step for all topology nodes, apply active faults, record to store,
@@ -89,6 +125,36 @@ class TelemetryPipeline:
             topo = getattr(self._generator, "_topology", None)
             node_types = {n.node_id: n.node_type for n in topo.all_nodes()} if topo else None
             self._alarm_service.process_snapshots(effective_snapshots, node_types=node_types)
+
+            # 4. Correlation, RCA, and Incident lifecycle
+            if self._correlation_engine is not None and topo is not None:
+                active_alarms = self._alarm_service.manager.get_active_alarms()
+                if active_alarms:
+                    corr_result = self._correlation_engine.correlate(active_alarms, topology=topo)
+                    for group in corr_result.groups:
+                        rca_result = None
+                        if self._rca_engine is not None:
+                            try:
+                                rca_result = self._rca_engine.analyze_group(
+                                    group=group,
+                                    topology=topo,
+                                    transport=getattr(self, "_transport", None) or getattr(self._rca_engine, "_transport", None),
+                                    telemetry_snapshots=effective_snapshots,
+                                    analysis_timestamp=effective_ts,
+                                )
+                            except Exception:
+                                pass
+                        inc_svc = self.incident_service
+                        if inc_svc is not None:
+                            try:
+                                inc_svc.create_or_update_incident(
+                                    correlation_group=group,
+                                    rca_result=rca_result,
+                                    actor="SYSTEM",
+                                    creation_timestamp=effective_ts,
+                                )
+                            except Exception as exc:
+                                logger.exception("Failed to create or update incident: %s", exc)
 
         return effective_snapshots
 
@@ -124,6 +190,36 @@ class TelemetryPipeline:
                 node_types={node_id: node_type} if node_type else None,
             )
 
+            # Correlation, RCA, and Incident lifecycle
+            if self._correlation_engine is not None and topo is not None:
+                active_alarms = self._alarm_service.manager.get_active_alarms()
+                if active_alarms:
+                    corr_result = self._correlation_engine.correlate(active_alarms, topology=topo)
+                    for group in corr_result.groups:
+                        rca_result = None
+                        if self._rca_engine is not None:
+                            try:
+                                rca_result = self._rca_engine.analyze_group(
+                                    group=group,
+                                    topology=topo,
+                                    transport=getattr(self, "_transport", None) or getattr(self._rca_engine, "_transport", None),
+                                    telemetry_snapshots=[effective_snapshot],
+                                    analysis_timestamp=effective_ts,
+                                )
+                            except Exception:
+                                pass
+                        inc_svc = self.incident_service
+                        if inc_svc is not None:
+                            try:
+                                inc_svc.create_or_update_incident(
+                                    correlation_group=group,
+                                    rca_result=rca_result,
+                                    actor="SYSTEM",
+                                    creation_timestamp=effective_ts,
+                                )
+                            except Exception as exc:
+                                logger.exception("Failed to create or update incident: %s", exc)
+
         return effective_snapshot
 
     def ingest_snapshots(self, snapshots: Sequence[KPISnapshot]) -> int:
@@ -144,20 +240,31 @@ def get_telemetry_pipeline() -> TelemetryPipeline:
     global _default_pipeline
     with _pipeline_lock:
         if _default_pipeline is None:
+            from nexus.correlation.engine import AlarmCorrelationEngine
             from nexus.detection.service import get_alarm_service
             from nexus.fault.service import get_fault_service
+            from nexus.incidents.api import get_incident_service
+            from nexus.rca.engine import RootCauseAnalysisEngine
+            from nexus.transport.builder import build_reference_transport_network
 
             topo = get_topology_registry()
             store = get_telemetry_store()
             gen = SyntheticTelemetryGenerator(topology=topo)
             fault_svc = get_fault_service()
             alarm_svc = get_alarm_service()
+            corr_engine = AlarmCorrelationEngine(topology=topo)
+            trans = build_reference_transport_network(topo)
+            rca_engine = RootCauseAnalysisEngine(topology=topo, transport=trans)
             _default_pipeline = TelemetryPipeline(
                 generator=gen,
                 store=store,
                 fault_service=fault_svc,
                 alarm_service=alarm_svc,
+                correlation_engine=corr_engine,
+                rca_engine=rca_engine,
+                incident_service=None,
             )
+            _default_pipeline._transport = trans
         return _default_pipeline
 
 

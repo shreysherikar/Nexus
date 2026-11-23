@@ -143,7 +143,8 @@ def get_incident_service() -> IncidentService:
     global _default_service
     if _default_service is None:
         db_url = os.getenv("DATABASE_URL") or os.getenv("NEXUS_DATABASE_URL")
-        if not db_url and os.getenv("POSTGRES_PASSWORD"):
+        in_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
+        if not db_url and os.getenv("POSTGRES_PASSWORD") and not is_sqlite_dev_mode() and not in_pytest:
             from sqlalchemy.engine import URL
 
             pg_user = os.getenv("POSTGRES_USER", "nexus_user")

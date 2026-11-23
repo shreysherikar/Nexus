@@ -143,7 +143,7 @@ class TestMainAppIntegration:
         # 5. Faults router
         resp_faults = client.get("/api/v1/faults/scenarios")
         assert resp_faults.status_code == 200
-        assert resp_faults.json()["total"] == 5
+        assert resp_faults.json()["total"] == 6
 
     def test_websocket_endpoint_operational(self, client: TestClient) -> None:
         """WebSocket /ws/live connects and responds to heartbeat ping."""

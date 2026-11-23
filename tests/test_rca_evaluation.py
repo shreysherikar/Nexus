@@ -240,6 +240,7 @@ class TestEndToEndScenarioReplayRCA:
             ("radio_interference", RootCauseType.RADIO_INTERFERENCE, TargetType.NODE),
             ("cell_congestion", RootCauseType.CELL_CONGESTION, TargetType.NODE),
             ("site_power_failure", RootCauseType.SITE_POWER_FAILURE, TargetType.NODE),
+            ("core_router_failure", RootCauseType.CORE_ROUTER_FAILURE, TargetType.NODE),
         ],
     )
     def test_full_pipeline_scenario_rca(
@@ -314,22 +315,18 @@ class TestEndToEndScenarioReplayRCA:
         assert len(matching_hypotheses) > 0, f"Expected {expected_cause} in hypotheses"
         assert matching_hypotheses[0].confidence_score >= 0.70
 
+        assert report.top_1_cause_accuracy == 1.0
+        assert report.target_accuracy == 1.0
+        assert report.both_accuracy == 1.0
+        assert match.cause_correct is True
+        assert match.target_correct is True
+        assert match.both_correct is True
+        assert match.diagnosed_cause_type == expected_cause.value
+        assert match.diagnosed_target_id == gt_record.target_id
         if scenario_key == "backhaul_failure":
-            # Under complete link severance, downstream site telemetry reflects total outage,
-            # so both BACKHAUL_FAILURE and SITE_POWER_FAILURE tie as co-primary (score 0.90).
-            # Verify that the backhaul failure hypothesis identified the exact transport link.
             bh_hyp = matching_hypotheses[0]
             assert bh_hyp.target_id == gt_record.target_id
             assert bh_hyp.target_type == TargetType.TRANSPORT_LINK
-        else:
-            assert report.top_1_cause_accuracy == 1.0
-            assert report.target_accuracy == 1.0
-            assert report.both_accuracy == 1.0
-            assert match.cause_correct is True
-            assert match.target_correct is True
-            assert match.both_correct is True
-            assert match.diagnosed_cause_type == expected_cause.value
-            assert match.diagnosed_target_id == gt_record.target_id
 
 
 # ---------------------------------------------------------------------------

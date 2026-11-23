@@ -17,6 +17,7 @@ class FaultType(str, Enum):
     RADIO_INTERFERENCE = "RADIO_INTERFERENCE"
     CELL_CONGESTION = "CELL_CONGESTION"
     SITE_POWER_FAILURE = "SITE_POWER_FAILURE"
+    CORE_ROUTER_FAILURE = "CORE_ROUTER_FAILURE"
 
     def __str__(self) -> str:
         return self.value
@@ -51,6 +52,13 @@ FAULT_EFFECT_DIMENSIONS: dict[FaultType, frozenset[EffectDimension]] = {
         EffectDimension.RADIO_RESOURCE,
     }),
     FaultType.SITE_POWER_FAILURE: frozenset({
+        EffectDimension.AVAILABILITY,
+        EffectDimension.PERFORMANCE,
+        EffectDimension.RELIABILITY,
+        EffectDimension.RADIO_SIGNAL,
+        EffectDimension.RADIO_RESOURCE,
+    }),
+    FaultType.CORE_ROUTER_FAILURE: frozenset({
         EffectDimension.AVAILABILITY,
         EffectDimension.PERFORMANCE,
         EffectDimension.RELIABILITY,

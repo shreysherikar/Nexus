@@ -164,6 +164,8 @@ def evaluate_backhaul_failure(
     if has_avail_degradation:
         if not (has_lat_degradation and has_tp_degradation):
             score += 0.20
+        else:
+            score += 0.10
         for a in avail_alarms[:2]:
             evidence_items.append(
                 EvidenceItem(
@@ -1119,6 +1121,89 @@ def evaluate_cell_outage(
         hypothesis_id=f"HYP-OUTAGE-{target_cell_id}-{group.group_id}",
         cause_type=RootCauseType.CELL_OUTAGE,
         target_id=target_cell_id,
+        target_type=TargetType.NODE,
+        confidence_score=min(1.0, score),
+        explanation=explanation,
+        evidence_items=tuple(evidence_items),
+        group_id=group.group_id,
+    )
+
+
+def evaluate_core_router_failure(
+    group: CorrelationGroup,
+    topology: Topology,
+    transport: Optional[TransportNetwork],
+    snapshot_map: Mapping[str, KPISnapshot],
+) -> Optional[RootCauseHypothesis]:
+    """Evaluate whether correlation group symptoms match a central Core Router failure pattern.
+
+    Diagnostic Signature:
+    - Target: CORE node (e.g. CORE-01).
+    - Anchor node is at CORE tier or alarms span multiple distinct aggregation branches.
+    - Systemic availability collapse (<= 10%) or widespread outage across downstream topology.
+    """
+    core_nodes = [n for n in topology.all_nodes() if n.node_type == NodeType.CORE]
+    if not core_nodes:
+        return None
+    core_node_id = core_nodes[0].node_id
+
+    is_core_anchor = group.anchor_node_id == core_node_id or group.root_cause_tier == NodeType.CORE
+
+    impacted_nodes = group.node_ids
+    agg_domains: set[str] = set()
+    for nid in impacted_nodes:
+        if topology.has_node(nid):
+            curr = topology.get_node(nid)
+            while curr and curr.parent_id:
+                p = topology.get_node(curr.parent_id)
+                if p and p.node_type == NodeType.AGGREGATION:
+                    agg_domains.add(p.node_id)
+                    break
+                curr = p
+
+    if not is_core_anchor and len(agg_domains) < 2 and len(impacted_nodes) < 6:
+        return None
+
+    score = 0.50
+    evidence_items: list[EvidenceItem] = []
+
+    if is_core_anchor:
+        score += 0.25
+
+    if len(agg_domains) >= 2:
+        score += 0.15
+
+    if len(impacted_nodes) >= 10:
+        score += 0.10
+
+    for nid in impacted_nodes:
+        snap = snapshot_map.get(nid)
+        if snap is not None:
+            if snap.reliability.availability_pct <= 10.0:
+                evidence_items.append(
+                    EvidenceItem(
+                        source_node_id=nid,
+                        metric_name="availability_pct",
+                        observed_value=snap.reliability.availability_pct,
+                        threshold_or_baseline=10.0,
+                        reasoning=f"Systemic availability collapse on {nid} due to core router unreachability",
+                        evidence_source="SNAPSHOT",
+                    )
+                )
+
+    if not evidence_items and not is_core_anchor:
+        return None
+
+    domain_count = max(1, len(agg_domains))
+    explanation = (
+        f"Central core router failure on '{core_node_id}': widespread systemic degradation "
+        f"impacting {len(impacted_nodes)} nodes across {domain_count} aggregation domain(s)."
+    )
+
+    return RootCauseHypothesis(
+        hypothesis_id=f"HYP-CORE-ROUTER-{core_node_id}-{group.group_id}",
+        cause_type=RootCauseType.CORE_ROUTER_FAILURE,
+        target_id=core_node_id,
         target_type=TargetType.NODE,
         confidence_score=min(1.0, score),
         explanation=explanation,

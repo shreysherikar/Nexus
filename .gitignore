@@ -65,6 +65,12 @@ coverage.xml
 *.key
 *.cert
 
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+
 # IDEs and Editors
 .vscode/*
 !.vscode/settings.json
@@ -92,8 +98,11 @@ Thumbs.db
 *.bak
 scratch/
 
-# Archives and verification bundles
+# Archives, evidence and verification bundles
 *.zip
 *.tar.gz
 *.tgz
-nexus_milestone*.zip
+nexus_*.zip
+evidence_manifest.*
+acceptance_test_results.json
+*.patch

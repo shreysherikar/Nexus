@@ -128,4 +128,23 @@ def build_reference_scenarios(
         ],
     )
 
+    # 6. Core Router Failure
+    scenarios["core_router_failure"] = FaultScenarioEngine(
+        topology=topology,
+        transport=transport,
+        scenario_id="SCENARIO-CORE-FAIL-01",
+        description="Central core router failure on CORE-01 collapsing connectivity across entire topology",
+        faults=[
+            Fault(
+                fault_id="FAULT-CORE-ROUTER-01",
+                fault_type=FaultType.CORE_ROUTER_FAILURE,
+                target_id="CORE-01",
+                start_time=base_time + timedelta(minutes=5),
+                end_time=base_time + timedelta(minutes=20),
+                severity=1.0,
+                description="Central core routing plane failure collapsing availability across all downstream nodes",
+            )
+        ],
+    )
+
     return scenarios

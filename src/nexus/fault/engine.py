@@ -126,6 +126,16 @@ class FaultScenarioEngine:
                 raise IncompatibleTargetError(
                     f"SITE_POWER_FAILURE requires a SITE node target, got {target_node.node_type.value} ('{fault.target_id}')"
                 )
+        elif fault.fault_type == FaultType.CORE_ROUTER_FAILURE:
+            if not self._topology.has_node(fault.target_id):
+                raise IncompatibleTargetError(
+                    f"CORE_ROUTER_FAILURE target '{fault.target_id}' does not exist in topology"
+                )
+            target_node = self._topology.get_node(fault.target_id)
+            if target_node.node_type != NodeType.CORE:
+                raise IncompatibleTargetError(
+                    f"CORE_ROUTER_FAILURE requires a CORE node target, got {target_node.node_type.value} ('{fault.target_id}')"
+                )
 
     def _compute_affected_nodes(self, fault: Fault) -> list[str]:
         """Compute the deterministic list of topology nodes impacted by this fault."""
@@ -134,6 +144,11 @@ class FaultScenarioEngine:
             affected.append(fault.target_id)
         elif fault.fault_type == FaultType.SITE_POWER_FAILURE:
             # Target site itself + all its descendants (deterministic BFS order)
+            affected.append(fault.target_id)
+            descendants = self._topology.get_descendants(fault.target_id)
+            affected.extend(d.node_id for d in descendants)
+        elif fault.fault_type == FaultType.CORE_ROUTER_FAILURE:
+            # Target core router itself + all descendants (the entire network topology)
             affected.append(fault.target_id)
             descendants = self._topology.get_descendants(fault.target_id)
             affected.extend(d.node_id for d in descendants)
@@ -262,12 +277,18 @@ class FaultScenarioEngine:
             # Determine dominant impact on this node
             # Priority: Outage / Link failure / Power failure > Congestion / Interference
             is_outage = any(
-                f.fault_type in (FaultType.CELL_OUTAGE, FaultType.SITE_POWER_FAILURE, FaultType.BACKHAUL_FAILURE)
+                f.fault_type in (
+                    FaultType.CELL_OUTAGE,
+                    FaultType.SITE_POWER_FAILURE,
+                    FaultType.BACKHAUL_FAILURE,
+                    FaultType.CORE_ROUTER_FAILURE,
+                )
                 for f in impact_faults
             )
 
             if is_outage:
-                effective_snap = self._apply_outage(snap)
+                elevate_latency = not all(f.fault_type == FaultType.SITE_POWER_FAILURE for f in impact_faults)
+                effective_snap = self._apply_outage(snap, elevate_latency=elevate_latency)
             else:
                 for f in impact_faults:
                     if f.fault_type == FaultType.RADIO_INTERFERENCE:
@@ -279,13 +300,14 @@ class FaultScenarioEngine:
 
         return effective_snapshots
 
-    def _apply_outage(self, snap: KPISnapshot) -> KPISnapshot:
+    def _apply_outage(self, snap: KPISnapshot, elevate_latency: bool = True) -> KPISnapshot:
         """Apply complete service outage to a snapshot (0 throughput, 0 availability, 100% drop)."""
+        new_lat = round(snap.performance.latency_ms * 3.0, 2) if elevate_latency else snap.performance.latency_ms
         new_perf = replace(
             snap.performance,
             throughput_mbps=0.0,
             # Under outage, latency represents maximum timeout / unreachable penalty
-            latency_ms=round(snap.performance.latency_ms * 3.0, 2),
+            latency_ms=new_lat,
         )
         new_rel = replace(
             snap.reliability,

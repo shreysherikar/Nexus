@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 import os
 import pytest
@@ -242,7 +243,10 @@ class TestAlembicMigration:
         db_file = tmp_path / "test_alembic.db"
         test_url = f"sqlite:///{db_file}"
 
-        alembic_cfg = Config("alembic.ini")
+        project_root = Path(__file__).resolve().parent.parent
+        ini_path = str(project_root / "alembic.ini")
+        alembic_cfg = Config(ini_path)
+        alembic_cfg.set_main_option("script_location", str(project_root / "migrations"))
         alembic_cfg.set_main_option("sqlalchemy.url", test_url)
 
         # Upgrade to head
@@ -287,7 +291,10 @@ class TestAlembicMigration:
         db_file = tmp_path / "test_env_override.db"
         test_url = f"sqlite:///{db_file}"
 
-        alembic_cfg = Config("alembic.ini")
+        project_root = Path(__file__).resolve().parent.parent
+        ini_path = str(project_root / "alembic.ini")
+        alembic_cfg = Config(ini_path)
+        alembic_cfg.set_main_option("script_location", str(project_root / "migrations"))
         alembic_cfg.set_main_option("sqlalchemy.url", test_url)
 
         # Upgrade to head should apply to SQLite despite PostgreSQL DATABASE_URL in env

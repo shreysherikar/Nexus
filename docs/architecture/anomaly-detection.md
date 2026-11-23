@@ -1,8 +1,8 @@
-# NEXUS Anomaly Detection & Alarm Generation Specification
+# NEXUS Anomaly Detection & Alarm Generation
 
 ## 1. Overview and Architectural Boundary
 
-The `nexus.detection` package introduces deterministic, real-time anomaly detection and alarm lifecycle management over NEXUS synthetic telemetry.
+The `nexus.detection` package provides deterministic, real-time anomaly detection and alarm lifecycle management over NEXUS synthetic telemetry.
 
 ### Ground-Truth Separation Principle
 
@@ -33,7 +33,7 @@ A core architectural invariant of NEXUS is the strict decoupling between detecti
 
 ## 2. Threshold-Based Detection
 
-Threshold detection evaluates point-in-time metrics against configurable operational bounds defined in [`src/nexus/detection/rules.py`](../../src/nexus/detection/rules.py).
+Threshold detection evaluates point-in-time metrics against configurable operational bounds defined in `nexus.detection.rules`.
 
 ### Rule Specification
 
@@ -42,9 +42,9 @@ Threshold detection evaluates point-in-time metrics against configurable operati
 | `rule_id` | `str` | Unique non-empty string identifier. |
 | `metric_name` | `str` | Valid KPI name (`throughput_mbps`, `latency_ms`, `sinr_db`, etc.). |
 | `operator` | `ComparisonOperator` | Comparison operator (`>`, `>=`, `<`, `<=`). |
-| `threshold` | `float` | Finite real threshold value (booleans rejected). |
+| `threshold` | `float` | Finite real threshold value. |
 | `severity` | `Severity` | Assigned alarm severity (`WARNING`, `MAJOR`, `CRITICAL`). |
-| `node_types` | `Optional[frozenset[NodeType]]` | Applicable node tiers (e.g. `CELL` only for radio metrics). |
+| `node_types` | `Optional[frozenset[NodeType]]` | Applicable node tiers (e.g., `CELL` only for radio metrics). |
 | `clear_threshold` | `Optional[float]` | Recovery threshold defining the hysteresis clearing boundary. |
 | `enabled` | `bool` | Toggle state for active rule evaluation. |
 | `description` | `str` | Human-readable diagnostic description. |
@@ -55,9 +55,9 @@ To prevent alarm flapping when a metric oscillates near the trigger boundary, ru
 - **Upper-bound triggers (`>`, `>=`)**: Violation occurs when $\text{val} > \text{threshold}$. Recovery requires $\text{val} \le \text{clear\_threshold}$, where $\text{clear\_threshold} \le \text{threshold}$.
 - **Lower-bound triggers (`<`, `<=`)**: Violation occurs when $\text{val} < \text{threshold}$. Recovery requires $\text{val} \ge \text{clear\_threshold}$, where $\text{clear\_threshold} \ge \text{threshold}$.
 - Values between the recovery threshold and trigger threshold remain in their current alarm state.
-- Missing metrics (e.g. non-cell nodes lacking radio metrics) are skipped; missing values are **never fabricated** or treated as recovery.
+- Missing metrics (e.g., non-cell nodes lacking radio metrics) are skipped; missing values are never fabricated or treated as recovery.
 
-### Standard Telecom Baseline Rules
+### Standard Baseline Rules
 
 | Rule ID | Metric | Operator | Trigger | Clear | Severity | Target Tier |
 | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -74,11 +74,11 @@ To prevent alarm flapping when a metric oscillates near the trigger boundary, ru
 
 ## 3. Statistical Anomaly Detection
 
-Statistical detection runs independently per `(node_id, metric_name)` tuple using two complementary time-series algorithms implemented in [`src/nexus/detection/statistical_detector.py`](../../src/nexus/detection/statistical_detector.py).
+Statistical detection runs independently per `(node_id, metric_name)` tuple using two complementary time-series algorithms implemented in `nexus.detection.statistical_detector`.
 
-### A. Rolling Median & MAD
+### A. Rolling Median & Median Absolute Deviation (MAD)
 
-Maintains a fixed-size ring buffer of recent observations ($W \le \text{window\_size}$).
+Maintains a fixed-size ring buffer of recent observations ($W \le \text{window\_size}$):
 
 1. **Median ($M$)**:
    $$M = \text{median}(H)$$
@@ -92,9 +92,7 @@ Maintains a fixed-size ring buffer of recent observations ($W \le \text{window\_
 5. **Anomaly Condition**:
    $$\text{score} \ge \text{median\_deviation\_threshold}$$
 
-Both $\text{raw\_scale}$ and $\text{effective\_scale}$ are preserved in the `AnomalyEvent` evidence so that $\text{score} = \text{deviation} / \text{effective\_scale}$ is independently verifiable.
-
-The $0.05 \cdot \max(|M|, 1.0)$ minimum scale floor ensures that completely constant historical baselines with zero variance handle sudden shifts gracefully without division by zero.
+Both $\text{raw\_scale}$ and $\text{effective\_scale}$ are preserved in the `AnomalyEvent` evidence so that $\text{score} = \text{deviation} / \text{effective\_scale}$ is independently verifiable. The minimum scale floor ($0.05 \cdot \max(|M|, 1.0)$) ensures that zero-variance historical baselines handle sudden shifts without division by zero.
 
 ### B. Exponentially Weighted Moving Average (EWMA)
 
@@ -111,31 +109,27 @@ Tracks recursive exponential baselines and sample variance:
 4. **Anomaly Condition**:
    $$Z_t \ge \text{ewma\_sensitivity}$$
 
-Both $\text{raw\_spread}$ and $\text{effective\_spread}$ are preserved in the `AnomalyEvent` evidence so that $Z_t = \text{diff} / \text{effective\_spread}$ is independently verifiable.
-
 ### Warmup and Shared Contamination Policy
 
 - **Warmup Period**: Anomalies are suppressed during the initial $N$ observations ($\text{warmup\_count}$) per `(node_id, metric_name)` to allow baselines and variance to stabilize.
 - **Shared Contamination Prevention (Evaluate-Then-Commit)**:
   When both statistical detectors (Rolling Median and EWMA) are enabled:
   1. Both detectors independently evaluate the incoming observation against their **pre-observation baseline states** in read-only mode without mutating history.
-  2. If **either** enabled method flags the sample as anomalous, the sample is excluded from **BOTH** rolling median and EWMA baseline updates.
+  2. If **either** enabled method flags the sample as anomalous, the sample is excluded from **both** rolling median and EWMA baseline updates.
   3. If **neither** enabled method flags the sample, the sample updates both enabled baselines.
   4. If both flag, both emit independent `AnomalyEvent` instances, preserving diagnostic clarity while protecting all baselines from contamination.
-  5. Disabled detectors do not participate in anomaly decisions or baseline updates.
-- **Known Limitation**: If a permanent structural improvement or capacity change occurs (e.g. throughput doubling from a hardware upgrade), the detector will treat the persistent shift as anomalous until the detector's state is reset (`reset_node()` or `reset()`).
 
 ---
 
 ## 4. Alarm Identity and Lifecycle Management
 
-Defined in [`src/nexus/detection/models.py`](../../src/nexus/detection/models.py) and [`src/nexus/detection/alarm_manager.py`](../../src/nexus/detection/alarm_manager.py).
+Defined in `nexus.detection.models` and `nexus.detection.alarm_manager`.
 
 ### Deduplication Identity
 
 Each alarm has a deterministic deduplication composite key:
 $$\text{key} = (\text{node\_id}, \text{metric\_name}, \text{rule\_id}, \text{source})$$
-This guarantees that two different rules monitoring the same metric (e.g. Warning vs Critical, or Threshold vs Statistical) maintain independent lifecycle states.
+This guarantees that two different rules monitoring the same metric (e.g., Warning vs Critical, or Threshold vs Statistical) maintain independent lifecycle states.
 
 ### Lifecycle State Machine
 
@@ -163,7 +157,7 @@ This guarantees that two different rules monitoring the same metric (e.g. Warnin
 ```
 
 1. **Raise**: On first observation, a unique `alarm_id` is assigned, `status = ACTIVE`, and `observation_count = 1`.
-2. **Update**: On subsequent contiguous observations, `first_seen` is preserved, `last_seen` is updated to the current timestamp, and `observation_count` increments.
+2. **Update**: On subsequent contiguous observations, `first_seen` is preserved, `last_seen` is updated to current timestamp, and `observation_count` increments.
 3. **Clear**: When a subsequent snapshot contains the metric and meets the clear threshold, `status = CLEARED`, `cleared_at` is set, and the alarm is archived into historical logs.
 4. **Reappearance**: If the anomaly recurs after clearing, a new alarm is generated with a fresh `alarm_id`, preserving full historical traceability.
 
@@ -172,45 +166,30 @@ This guarantees that two different rules monitoring the same metric (e.g. Warnin
 Both `AnomalyEvent` and `Alarm` defensively freeze diagnostic evidence structures upon construction using `_freeze_evidence`:
 - Nested mappings are converted recursively into `types.MappingProxyType`.
 - Collections (lists, sets) are recursively converted into immutable `tuple` and `frozenset` structures.
-- Direct mutations (e.g. `event.evidence['k'] = v` or `alarm.evidence['nested']['k'] = v`) raise `TypeError`.
-- Mutating the caller's source dictionary after passing it to an event or alarm has zero effect on the stored object.
-- Queries such as `AlarmManager.get_active_alarms()`, `get_cleared_alarms()`, and `get_all_alarms()` return alarms whose evidence cannot be mutated.
-
-### Transactional Alarm Clearing
-
-`AlarmManager.clear_alarm()` enforces transactional state mutation:
-- The clearing timestamp is validated first: it must be a valid datetime and cannot be earlier than `active.last_seen`.
-- The cleared `Alarm` instance is fully constructed and validated prior to mutating any internal collection.
-- Only upon successful creation is the alarm removed from `_active_alarms` and appended to `_cleared_history`.
-- On any validation failure, the active alarm remains unchanged in `_active_alarms`, and history remains unmodified.
+- Direct mutations raise `TypeError`.
 
 ---
 
 ## 5. Detection Engine Coordinator
 
-Implemented in [`src/nexus/detection/engine.py`](../../src/nexus/detection/engine.py), the `AnomalyDetectionEngine` coordinates all detectors and enforces batch safety.
+Implemented in `nexus.detection.engine`, the `AnomalyDetectionEngine` coordinates all detectors and enforces batch safety.
 
 ### Ingestion Requirements & Transactional Atomicity Guarantee
 
 1. **Input Pre-Validation**: Prior to processing any snapshot in a batch:
-   - The sequence of snapshots is validated for type integrity and strictly monotonic chronological order per node.
-   - The optional `node_types` mapping is validated: all keys must be non-empty strings, and values must be valid `NodeType` enum instances or valid case-insensitive string names (e.g. `"cell"` -> `NodeType.CELL`). Invalid types immediately raise `DetectionError`.
+   - Sequence of snapshots is validated for type integrity and strictly monotonic chronological order per node.
+   - The optional `node_types` mapping is validated for valid `NodeType` enum instances.
 2. **Duplicate Rejection**: Duplicate observations for the same node and timestamp within a batch or stream raise `DuplicateObservationError`.
 3. **Transactional Batch Rollback**:
    - Before executing the batch loop, the engine creates an in-memory snapshot of its state: `_last_node_timestamps`, `_statistical_detector` internal baselines, and `_alarm_manager` active alarms/history.
    - If an unexpected error occurs during processing of any snapshot, the engine restores all states to their pre-batch snapshot and re-raises the error.
    - A failed batch leaves zero partial detector baselines, partial alarms, or corrupted timestamps behind.
-4. **Missing Metric Safety**: If a snapshot lacks certain metrics (e.g. non-cell nodes lacking radio metrics), detectors evaluate only the metrics present and never fabricate zeros or clear existing alarms.
 
 ---
 
 ## 6. Post-Detection Ground Truth Evaluation
 
-The evaluation subsystem in [`src/nexus/evaluation/`](../../src/nexus/evaluation/) compares generated alarms against `GroundTruthRecord` objects produced by the fault engine.
-
-### Alarm Deduplication
-
-Alarms are deduplicated by `alarm_id` prior to evaluation. Passing duplicate alarm objects or copies does not inflate alarm counts.
+The evaluation subsystem in `nexus.evaluation` compares generated alarms against `GroundTruthRecord` objects produced by the fault engine.
 
 ### Matching Policy & Overlapping Faults
 
@@ -218,37 +197,16 @@ An alarm $A$ is eligible to match an injected fault $G$ iff:
 1. $A.\text{node\_id} \in G.\text{affected\_node\_ids}$.
 2. $G.\text{start\_time} \le A.\text{first\_seen} \le G.\text{end\_time} + \Delta_{\text{grace}}$, where $\Delta_{\text{grace}}$ is the configured detection grace period (default 60s).
 
-**Overlapping Faults**: When two or more ground-truth faults overlap in time and share impacted nodes (e.g. a backhaul cut and cell outage both impacting the same cell), an alarm on that shared node within the overlap window matches all overlapping faults it is eligible for (each fault is marked detected). In alarm precision counting, the unique alarm is counted **once** as a True Positive, avoiding double-counting or alarm inflation.
-
 ### Metric Definitions
 
 Evaluation explicitly distinguishes alarm-level precision from fault-level recall:
-- **Fault-Level Recall (`fault_recall`, alias `recall`)**:
-  $$\text{fault\_recall} = \frac{\text{detected\_faults}}{\text{total\_faults}}$$
-  Proportion of injected ground-truth fault events that generated at least one eligible alarm.
-- **Alarm-Level Precision (`alarm_precision`, alias `precision`)**:
-  $$\text{alarm\_precision} = \frac{\text{unique\_true\_positive\_alarms}}{\text{total\_unique\_alarms}}$$
-  Proportion of unique alarms that corresponded to real injected faults.
-- **Hybrid F1 Score (`hybrid_f1_score`, alias `f1_score`)**:
-  $$\text{hybrid\_f1\_score} = 2 \cdot \frac{\text{alarm\_precision} \cdot \text{fault\_recall}}{\text{alarm\_precision} + \text{fault\_recall}}$$
-  Calculated as the harmonic mean of alarm-level precision and fault-level recall. Note: This combines two different counting units (alarms vs faults) and is explicitly documented as a hybrid tradeoff score rather than a conventional single-unit F1 score.
-- **Fault-Level Mean Time to Detect (MTTD)**:
-  For each detected fault $i$, $\text{TTD}_i = \max\left(0.0, (A_{\text{earliest}}.\text{first\_seen} - G_i.\text{start\_time}).\text{total\_seconds}()\right)$.
-  $$\text{MTTD} = \frac{1}{K} \sum_{i=1}^K \text{TTD}_i$$
-  Calculated using the earliest matching alarm for each detected fault, averaged across all detected faults.
-
-### Replay Evaluator Helper
-
-The `ScenarioReplayEvaluator` coordinates benchmark runs:
-1. Feeds synthetic telemetry snapshots (normal or fault-adjusted) into the engine.
-2. Retrieves all active and cleared alarms.
-3. Compares alarms against ground truth.
-4. Returns both the batch result and the comprehensive `EvaluationReport`.
+- **Fault-Level Recall (`fault_recall`)**: Proportion of injected ground-truth fault events that generated at least one eligible alarm.
+- **Alarm-Level Precision (`alarm_precision`)**: Proportion of unique alarms that corresponded to real injected faults.
+- **Hybrid F1 Score (`hybrid_f1_score`)**: Harmonic mean of alarm-level precision and fault-level recall.
+- **Fault-Level Mean Time to Detect (MTTD)**: Average time elapsed between ground-truth fault start and the earliest matching alarm.
 
 ---
 
-## 7. Limitations & Telecommunication Assumptions
+## 7. Downstream Integration
 
-1. **Symptom vs Root Cause**: Node and time matching proves anomaly detection on an affected node, but does not identify the underlying root-cause fault. For instance, a backhaul cut produces availability anomalies on downstream cells; detecting the cell outage confirms detection sensitivity but does not isolate the broken backhaul link. Root-cause correlation and alarm topology graph analysis are addressed in Milestone 5.
-2. **Single-Node Detection**: Detectors analyze nodes individually. Cross-node correlation across the topology tree occurs downstream.
-3. **Contamination Tradeoff**: Excluding anomalies from baseline updates prevents baseline contamination during acute faults, but requires explicit resets if the network undergoes permanent structural improvements.
+Single-node anomaly detection produces active alarms. Downstream topological correlation and root-cause analysis (`nexus.correlation`, `nexus.rca`) consume these alarms to isolate upstream failures and suppress cascading symptoms, as detailed in [Alarm Correlation & RCA](alarm-correlation-and-rca.md).

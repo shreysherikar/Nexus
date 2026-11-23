@@ -21,6 +21,7 @@ from nexus.rca.rules import (
     evaluate_backhaul_failure,
     evaluate_cell_congestion,
     evaluate_cell_outage,
+    evaluate_core_router_failure,
     evaluate_radio_interference,
     evaluate_site_power_failure,
 )
@@ -30,6 +31,7 @@ from nexus.transport.network import TransportNetwork
 
 
 RECOMMENDED_ACTIONS = {
+    RootCauseType.CORE_ROUTER_FAILURE: "Dispatch emergency network operations team to inspect central core router hardware and routing engine switchover.",
     RootCauseType.BACKHAUL_FAILURE: "Inspect physical transport link and verify optical transceivers / fiber continuity.",
     RootCauseType.SITE_POWER_FAILURE: "Verify facility grid power supply, backup battery voltage, and generator transfer switch.",
     RootCauseType.RADIO_INTERFERENCE: "Initiate spectrum analysis sweep to identify and locate external RF interference sources.",
@@ -167,6 +169,7 @@ class RootCauseAnalysisEngine:
 
         # 1. Evaluate all diagnostic rules
         rule_evaluators = [
+            evaluate_core_router_failure,
             evaluate_site_power_failure,
             evaluate_backhaul_failure,
             evaluate_radio_interference,

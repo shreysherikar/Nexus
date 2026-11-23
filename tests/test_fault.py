@@ -685,6 +685,7 @@ class TestReferenceScenariosSuite:
             "radio_interference",
             "cell_congestion",
             "site_power_failure",
+            "core_router_failure",
         }
         assert set(scenarios.keys()) == expected_keys
 

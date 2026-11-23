@@ -50,6 +50,7 @@ VALID_FAULT_SCENARIOS = (
     "radio_interference",
     "cell_congestion",
     "site_power_failure",
+    "core_router_failure",
 )
 VALID_COMPONENTS = (
     "topology",
@@ -292,6 +293,80 @@ class NexusMetricsManager:
             self.fault_scenario_active.labels(scenario_key=key).set(0.0)
         self.fault_affected_nodes_count.set(0.0)
 
+        # --- 7. Dashboard Compatibility & Observability Gauges ---
+        self.active_scenario = Gauge(
+            "nexus_active_scenario",
+            "Whether any fault scenario is currently active (1=active, 0=inactive).",
+            registry=self.registry,
+        )
+        self.fault_injections_total = Counter(
+            "nexus_fault_injections_total",
+            "Cumulative count of injected fault scenarios by scenario ID and fault type.",
+            ["scenario_id", "fault_type"],
+            registry=self.registry,
+        )
+        self.alarms_active_total = Gauge(
+            "nexus_alarms_active_total",
+            "Total currently active network alarms across all severity classifications.",
+            registry=self.registry,
+        )
+        self.incidents_active_total = Gauge(
+            "nexus_incidents_active_total",
+            "Total currently active unresolved incidents across all severity classifications.",
+            registry=self.registry,
+        )
+        self.mttd_seconds = Gauge(
+            "nexus_mttd_seconds",
+            "Mean Time to Detect across detected operational incidents in seconds.",
+            registry=self.registry,
+        )
+        self.mttr_seconds = Gauge(
+            "nexus_mttr_seconds",
+            "Mean Time to Resolve across resolved operational incidents in seconds.",
+            registry=self.registry,
+        )
+        self.kpi_availability_pct = Gauge(
+            "nexus_kpi_availability_pct",
+            "Overall network availability percentage across all nodes.",
+            registry=self.registry,
+        )
+        self.kpi_latency_ms = Gauge(
+            "nexus_kpi_latency_ms",
+            "Overall network latency in milliseconds across all nodes.",
+            registry=self.registry,
+        )
+        self.kpi_throughput_mbps = Gauge(
+            "nexus_kpi_throughput_mbps",
+            "Overall network throughput in Megabits per second across all nodes.",
+            registry=self.registry,
+        )
+        self.kpi_prb_utilization_pct = Gauge(
+            "nexus_kpi_prb_utilization_pct",
+            "Overall radio PRB utilization percentage across cell nodes.",
+            registry=self.registry,
+        )
+        self.websocket_active_connections = Gauge(
+            "nexus_websocket_active_connections",
+            "Total currently active WebSocket client connections.",
+            registry=self.registry,
+        )
+        self.topology_nodes_total = Gauge(
+            "nexus_topology_nodes_total",
+            "Total count of managed network topology nodes.",
+            registry=self.registry,
+        )
+
+        self.active_scenario.set(0.0)
+        self.alarms_active_total.set(0.0)
+        self.incidents_active_total.set(0.0)
+        self.mttd_seconds.set(0.0)
+        self.mttr_seconds.set(0.0)
+        self.kpi_availability_pct.set(100.0)
+        self.kpi_latency_ms.set(0.0)
+        self.kpi_throughput_mbps.set(0.0)
+        self.kpi_prb_utilization_pct.set(0.0)
+        self.websocket_active_connections.set(0.0)
+
     def record_http_request(
         self,
         method: str,
@@ -337,6 +412,7 @@ class NexusMetricsManager:
             node_count = len(topo) if hasattr(topo, "__len__") else len(topo.all_nodes())
             ready = node_count > 0
             self.component_ready.labels(component="topology").set(1.0 if ready else 0.0)
+            self.topology_nodes_total.set(float(node_count))
             if not ready:
                 is_all_ready = False
         except Exception:
@@ -350,6 +426,11 @@ class NexusMetricsManager:
             broadcaster = get_broadcaster()
             ready = broadcaster is not None
             self.component_ready.labels(component="broadcaster").set(1.0 if ready else 0.0)
+            if broadcaster is not None:
+                conn_cnt = broadcaster.active_connections_count
+                if callable(conn_cnt):
+                    conn_cnt = conn_cnt()
+                self.websocket_active_connections.set(float(conn_cnt))
             if not ready:
                 is_all_ready = False
         except Exception:
@@ -511,6 +592,17 @@ class NexusMetricsManager:
             prb_avg = sum(cell_prb) / len(cell_prb) if cell_prb else 0.0
             self.telemetry_radio_sinr_db_avg.set(sinr_avg)
             self.telemetry_radio_prb_utilization_pct_avg.set(prb_avg)
+            self.kpi_prb_utilization_pct.set(prb_avg)
+
+            all_avail = [s.reliability.availability_pct for s in latest_by_node.values()]
+            all_lat = [s.performance.latency_ms for s in latest_by_node.values()]
+            all_tp = [s.performance.throughput_mbps for s in latest_by_node.values()]
+            if all_avail:
+                self.kpi_availability_pct.set(sum(all_avail) / len(all_avail))
+            if all_lat:
+                self.kpi_latency_ms.set(sum(all_lat) / len(all_lat))
+            if all_tp:
+                self.kpi_throughput_mbps.set(sum(all_tp) / len(all_tp))
 
         except Exception as exc:
             logger.warning("Error updating telemetry metrics: %s", exc)
@@ -537,6 +629,7 @@ class NexusMetricsManager:
 
             for sev, cnt in active_counts.items():
                 self.alarms_active.labels(severity=sev).set(float(cnt))
+            self.alarms_active_total.set(float(sum(active_counts.values())))
 
             for (sev, st), cnt in total_counts.items():
                 self.alarms_total.labels(severity=sev, status=st).set(float(cnt))
@@ -585,6 +678,7 @@ class NexusMetricsManager:
 
             for sev, cnt in active_by_sev.items():
                 self.incidents_active.labels(severity=sev).set(float(cnt))
+            self.incidents_active_total.set(float(sum(active_by_sev.values())))
 
             # SLA breaches
             self.incidents_sla_breaches_total.labels(sla_type="acknowledgement").set(
@@ -595,15 +689,15 @@ class NexusMetricsManager:
             )
 
             # SLA performance numbers
-            self.incidents_mtta_seconds.set(
-                float(report.mtta_seconds) if report.mtta_seconds is not None else 0.0
-            )
-            self.incidents_mttr_seconds.set(
-                float(report.mttr_seconds) if report.mttr_seconds is not None else 0.0
-            )
-            self.incidents_mttd_seconds.set(
-                float(report.mttd_seconds) if report.mttd_seconds is not None else 0.0
-            )
+            mtta_val = float(report.mtta_seconds) if report.mtta_seconds is not None else 0.0
+            mttr_val = float(report.mttr_seconds) if report.mttr_seconds is not None else 0.0
+            mttd_val = float(report.mttd_seconds) if report.mttd_seconds is not None else 0.0
+
+            self.incidents_mtta_seconds.set(mtta_val)
+            self.incidents_mttr_seconds.set(mttr_val)
+            self.mttr_seconds.set(mttr_val)
+            self.incidents_mttd_seconds.set(mttd_val)
+            self.mttd_seconds.set(mttd_val)
             self.incidents_sla_compliance_pct.set(
                 float(report.sla_compliance_pct)
                 if report.sla_compliance_pct is not None
@@ -620,6 +714,7 @@ class NexusMetricsManager:
 
             fault_svc = get_fault_service()
             active_sc = fault_svc.get_active_scenario()
+            self.active_scenario.set(1.0 if active_sc.active else 0.0)
 
             for key in VALID_FAULT_SCENARIOS:
                 is_active = active_sc.active and active_sc.scenario_key == key
