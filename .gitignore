@@ -106,4 +106,5 @@ scratch/
 nexus_*.zip
 evidence_manifest.*
 acceptance_test_results.json
+*benchmark_results*.json
 *.patch
