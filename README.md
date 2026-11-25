@@ -346,14 +346,14 @@ npm run dev
 ### 12.2 Automated Test Execution
 
 ```bash
-# Backend pytest suite (557 tests across 17 test modules)
+# Backend pytest suite (597 tests across 18 test modules)
 python -m pytest -v
 
 # Frontend quality gates (from frontend/ directory)
 cd frontend
 npm run lint        # ESLint flat config
 npm run typecheck   # Strict TypeScript compiler check
-npm test            # Vitest suite (68 tests across 6 modules)
+npm test            # Vitest suite (69 tests across 6 modules)
 npm run build       # Production bundle build
 cd ..
 ```
@@ -371,6 +371,48 @@ The script verifies:
 - Genuine WebSocket handshake, ping/pong, and `TELEMETRY_SNAPSHOT` event delivery.
 - All six reference fault scenarios with degradation assertions, RCA cause/target matching, and recovery convergence.
 - Prometheus scrape status and Grafana panel query execution.
+
+### 12.4 Reproducible Six-Scenario Evaluation Benchmark
+
+The deterministic evaluation benchmark replays all six reference fault scenarios through the full pipeline (`Simulation -> Detection -> Correlation -> RCA -> Benchmark Evaluation`) against ground truth:
+
+```bash
+python scripts/run_benchmark.py
+```
+
+Optional arguments:
+- `--seed 42`: Random seed for deterministic telemetry generation.
+- `--steps 30`: Simulation time-steps per scenario (1 minute/step).
+- `-o results.json`: Output path for machine-readable JSON metrics.
+
+#### Verified Aggregate Benchmark Results
+
+| Metric Category | Metric | Verified Value | Scope / Definition |
+| :--- | :--- | :---: | :--- |
+| **Fault Coverage** | Reference Faults Detected | **6 / 6** (100.0%) | 1 injected fault per reference scenario |
+| | Undetected Faults | **0** | Zero false negatives at the fault level |
+| **Alarm Detection** | Total Alarms Raised | **704** | Across all 6 scenarios (30 steps each) |
+| | True Positive Alarms | **665** | Alarms on affected nodes within valid fault windows |
+| | False Positive Alarms | **39** | Background noise and threshold fluctuations |
+| | Micro Alarm Precision | **94.46%** | Alarm-level ratio: `665 / 704` |
+| | Fault Recall | **100.0%** | Fault-level ratio: `6 / 6` detected |
+| | Hybrid $F_1$ Score | **0.9715** | Harmonic mean of alarm precision & fault recall |
+| | Simulated MTTD | **0.0 s** | Mean Time to Detect (latency from fault onset to detection) |
+| **Alarm Correlation** | Correlation Groups Formed | **38** | Topology-aware clusters generated |
+| | Alarm-Count Reduction | **94.60%** | Ratio: `(704 alarms - 38 groups) / 704 alarms` |
+| **Root Cause Analysis** | Top-1 Cause Accuracy | **6 / 6** (100.0%) | Ground-truth cause ranked #1 in all scenarios |
+| | Target Entity Accuracy | **6 / 6** (100.0%) | Expected node or transport link isolated |
+| | Both Cause & Target Accuracy | **6 / 6** (100.0%) | Both cause and target correctly diagnosed |
+
+#### Metric Interpretation & Limitations
+
+- **Alarm Precision vs. Fault Recall**: Precision is calculated at the **alarm level** (`TP_alarms / total_alarms`), whereas recall is calculated at the **fault level** (`detected_faults / total_faults`).
+- **Hybrid $F_1$ Score**: The reported $F_1$ score (0.9715) is the harmonic mean of alarm-level precision and fault-level recall. Because the denominators represent distinct entities (alarms vs. faults), this is an operational composite metric rather than a conventional binary classification $F_1$.
+- **Synthetic Data Generation**: Evaluation uses synthetic telemetry data generated from the project's own generator (`SyntheticTelemetryGenerator`).
+- **Simulated MTTD of Zero Seconds**: The Mean Time to Detect (MTTD) is 0.0 seconds because the synthetic simulation engine applies the fault profile instantaneously at step $t=0$, tripping detectors on the very first evaluated snapshot.
+- **Detector Seed Coupling**: Detector baseline seeds come from the same nominal profiles (`DEFAULT_PROFILES`) that the generator uses.
+- **Alarm Reduction Interpretation**: The 94.60% reduction reflects an **alarm-count reduction through correlation** (`(alarms - groups) / alarms`), summarizing 704 raw alarms into 38 actionable incident clusters. It does not imply that 94.60% of alarms were false or unneeded noise.
+- **Absence of False Positive Rate (FPR)**: False Positive Rate ($\frac{FP}{FP + TN}$) is undefined and not calculated because True Negatives ($TN$) cannot be defined over continuous temporal telemetry streams without arbitrary negative-trial binning.
 
 ---
 
