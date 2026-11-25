@@ -44,6 +44,16 @@ class TelemetryPipeline:
         self._correlation_engine = correlation_engine
         self._rca_engine = rca_engine
         self._incident_service = incident_service
+        self._seed_alarm_service_baselines()
+
+    def _seed_alarm_service_baselines(self) -> None:
+        """Seed detector baselines from default profiles for all topology nodes."""
+        if self._alarm_service is not None:
+            topo = getattr(self._generator, "_topology", None)
+            if topo is not None and hasattr(topo, "all_nodes"):
+                engine = getattr(self._alarm_service, "_detection_engine", None) or getattr(self._alarm_service, "engine", None)
+                if engine is not None and hasattr(engine, "seed_nodes"):
+                    engine.seed_nodes(topo.all_nodes())
 
     @property
     def generator(self) -> SyntheticTelemetryGenerator:
@@ -66,6 +76,7 @@ class TelemetryPipeline:
 
     def set_alarm_service(self, alarm_service: Optional[Any]) -> None:
         self._alarm_service = alarm_service
+        self._seed_alarm_service_baselines()
 
     @property
     def correlation_engine(self) -> Optional[Any]:

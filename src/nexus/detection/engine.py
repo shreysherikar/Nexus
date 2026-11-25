@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence, Union
 
 from nexus.detection.alarm_manager import AlarmKey, AlarmManager
 from nexus.detection.exceptions import (
@@ -79,6 +79,11 @@ def _validate_node_types_mapping(
     return validated
 
 
+def _alarm_key(alarm: Alarm) -> AlarmKey:
+    """Extract canonical deduplication identity key from an Alarm instance."""
+    return (alarm.node_id, alarm.metric_name, alarm.rule_id, alarm.source)
+
+
 class AnomalyDetectionEngine:
     """Coordinates threshold and statistical detectors with alarm lifecycle management.
 
@@ -104,7 +109,14 @@ class AnomalyDetectionEngine:
             threshold_detector if threshold_detector is not None else ThresholdDetector()
         )
         self._statistical_detector = (
-            statistical_detector if statistical_detector is not None else StatisticalDetector()
+            statistical_detector if statistical_detector is not None else StatisticalDetector(
+                StatisticalDetectorConfig(
+                    directional_mode=True,
+                    consecutive_recovery_count=2,
+                    recovery_hysteresis_factor=0.8,
+                    surge_ratio_threshold=2.0,
+                )
+            )
         )
         self._alarm_manager = alarm_manager if alarm_manager is not None else AlarmManager()
 
@@ -113,6 +125,65 @@ class AnomalyDetectionEngine:
 
         # Tracks last observed UTC timestamp per node_id for strictly monotonic ordering enforcement
         self._last_node_timestamps: dict[str, datetime] = {}
+        # Tracks nodes whose baseline has been seeded from trusted architectural profiles
+        self._seeded_nodes: set[str] = set()
+
+    @property
+    def seeded_nodes(self) -> frozenset[str]:
+        """Return the set of node IDs whose baselines have been seeded."""
+        return frozenset(self._seeded_nodes)
+
+    def seed_node(
+        self,
+        node_id: str,
+        node_type: Optional[NodeType] = None,
+        overwrite: bool = False,
+    ) -> bool:
+        """Seed a node baseline from its trusted architectural profile exactly once."""
+        if not overwrite and node_id in self._seeded_nodes:
+            return False
+        if node_type is None:
+            prefix = node_id.split("-")[0].upper()
+            if prefix == "CELL":
+                node_type = NodeType.CELL
+            elif prefix in ("SITE", "ENB", "GNB"):
+                node_type = NodeType.SITE
+            elif prefix == "AGG":
+                node_type = NodeType.AGGREGATION
+            elif prefix == "CORE":
+                node_type = NodeType.CORE
+        if node_type is not None:
+            seeded = self._statistical_detector.seed_baselines(node_id, node_type, overwrite=overwrite)
+            if seeded:
+                self._seeded_nodes.add(node_id)
+                return True
+        return False
+
+    def seed_nodes(
+        self,
+        nodes: Union[Mapping[str, Optional[NodeType]], Iterable[Any]],
+        overwrite: bool = False,
+    ) -> int:
+        """Seed multiple nodes from their trusted architectural profiles."""
+        count = 0
+        if isinstance(nodes, Mapping):
+            for nid, ntype in nodes.items():
+                if self.seed_node(nid, ntype, overwrite=overwrite):
+                    count += 1
+        else:
+            for item in nodes:
+                nid = getattr(item, "node_id", None) or getattr(item, "id", None) or (str(item) if not isinstance(item, (dict, tuple, list)) else None)
+                ntype = getattr(item, "node_type", None) or getattr(item, "type", None)
+                if nid and self.seed_node(nid, ntype, overwrite=overwrite):
+                    count += 1
+        return count
+
+    def reset(self) -> None:
+        """Reset internal detector states, timestamps, and seeded registry."""
+        self._last_node_timestamps.clear()
+        self._seeded_nodes.clear()
+        self._statistical_detector.reset()
+        self._alarm_manager.reset()
 
     @property
     def threshold_detector(self) -> ThresholdDetector:
@@ -228,6 +299,7 @@ class AnomalyDetectionEngine:
 
         # 2. Snapshot engine state for transactional rollback
         saved_timestamps = dict(self._last_node_timestamps)
+        saved_seeded = set(self._seeded_nodes)
         saved_stats = self._statistical_detector.snapshot_state()
         saved_alarms = self._alarm_manager.snapshot_state()
 
@@ -240,6 +312,7 @@ class AnomalyDetectionEngine:
             # 3. Sequential processing
             for snapshot in snapshots:
                 node_type = norm_node_types.get(snapshot.node_id) if norm_node_types else None
+
                 snap_events: list[AnomalyEvent] = []
 
                 # A. Threshold detection
@@ -249,7 +322,13 @@ class AnomalyDetectionEngine:
 
                 # B. Statistical detection
                 if self._enable_statistical:
-                    s_events = self._statistical_detector.evaluate_snapshot(snapshot)
+                    if node_type is not None:
+                        try:
+                            s_events = self._statistical_detector.evaluate_snapshot(snapshot, node_type=node_type)
+                        except TypeError:
+                            s_events = self._statistical_detector.evaluate_snapshot(snapshot)
+                    else:
+                        s_events = self._statistical_detector.evaluate_snapshot(snapshot)
                     snap_events.extend(s_events)
 
                 all_events.extend(snap_events)
@@ -274,20 +353,32 @@ class AnomalyDetectionEngine:
 
                 for active in active_for_node:
                     key = (active.node_id, active.metric_name, active.rule_id, active.source)
-                    # If this condition was flagged as anomalous in this snapshot, it cannot clear
-                    if key in flagged_keys:
-                        continue
 
                     is_recovered: Optional[bool] = None
 
                     if active.source == DetectionSource.THRESHOLD:
+                        if key in flagged_keys:
+                            continue
                         is_recovered = self._threshold_detector.check_recovery(snapshot, active.rule_id)
                     elif active.source in (DetectionSource.STATISTICAL_MEDIAN, DetectionSource.STATISTICAL_EWMA):
+                        # Decoupled recovery evaluation: evaluates even if statistical detection previously flagged
+                        # under a contaminated baseline
                         is_recovered = self._statistical_detector.check_recovery(
-                            snapshot, active.source, active.metric_name
+                            snapshot, active.source, active.metric_name, node_type=node_type
                         )
 
                     if is_recovered is True:
+                        if key in flagged_keys:
+                            flagged_keys.remove(key)
+                            snap_events = [e for e in snap_events if not (
+                                e.node_id == active.node_id and e.metric_name == active.metric_name and e.source == active.source
+                            )]
+                            all_events = [e for e in all_events if not (
+                                e.node_id == active.node_id and e.metric_name == active.metric_name and e.source == active.source
+                            )]
+                            new_alarms = [a for a in new_alarms if _alarm_key(a) != key]
+                            updated_alarms = [a for a in updated_alarms if _alarm_key(a) != key]
+
                         cleared = self._alarm_manager.clear_alarm(key, snapshot.timestamp)
                         if cleared is not None:
                             cleared_alarms.append(cleared)

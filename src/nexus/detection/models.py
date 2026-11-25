@@ -149,6 +149,11 @@ class AnomalyEvent:
             raise InvalidAlarmStateError(f"evidence must be a mapping, got {type(self.evidence).__name__}")
         object.__setattr__(self, "evidence", _freeze_evidence(self.evidence))
 
+    @property
+    def key(self) -> tuple[str, str, str, DetectionSource]:
+        """Return the unique deduplication identity key (node_id, metric_name, rule_id, source)."""
+        return (self.node_id, self.metric_name, self.rule_id, self.source)
+
 
 @dataclass(frozen=True)
 class Alarm:
@@ -257,3 +262,8 @@ class Alarm:
         if not isinstance(self.evidence, Mapping):
             raise InvalidAlarmStateError(f"evidence must be a mapping, got {type(self.evidence).__name__}")
         object.__setattr__(self, "evidence", _freeze_evidence(self.evidence))
+
+    @property
+    def key(self) -> tuple[str, str, str, DetectionSource]:
+        """Return the unique deduplication identity key (node_id, metric_name, rule_id, source)."""
+        return (self.node_id, self.metric_name, self.rule_id, self.source)

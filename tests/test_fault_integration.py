@@ -303,36 +303,52 @@ class TestFaultIntegrationEndToEnd:
         assert deact_resp.status_code == 200
         assert deact_resp.json()["active_scenario"]["active"] is False
 
-        # Phase 4: Generate Recovery Simulation Step
-        recov_step_resp = client.post("/api/v1/telemetry/generate-step")
-        assert recov_step_resp.status_code == 200
-        ts_recov = recov_step_resp.json()["timestamp"]
-        assert ts_recov != ts_faulted
+        # Phase 4: Generate First Recovery Simulation Step (Hysteresis Sample 1)
+        recov_step_resp1 = client.post("/api/v1/telemetry/generate-step")
+        assert recov_step_resp1.status_code == 200
+        ts_recov1 = recov_step_resp1.json()["timestamp"]
+        assert ts_recov1 != ts_faulted
 
-        # Query latest telemetry for CELL-05
-        telem_recov_resp = client.get("/api/v1/telemetry?node_id=CELL-05&limit=1")
-        assert telem_recov_resp.status_code == 200
-        cell05_recov = telem_recov_resp.json()["items"][0]
+        # Query latest telemetry for CELL-05 after first recovery step
+        telem_recov_resp1 = client.get("/api/v1/telemetry?node_id=CELL-05&limit=1")
+        assert telem_recov_resp1.status_code == 200
+        cell05_recov1 = telem_recov_resp1.json()["items"][0]
+        assert cell05_recov1["timestamp"] == ts_recov1
+        assert cell05_recov1["radio"]["sinr_db"] >= 15.0
+        assert cell05_recov1["performance"]["throughput_mbps"] >= 150.0
+        assert cell05_recov1["reliability"]["connection_drop_rate_pct"] < 1.0
 
-        # CELL-05 must have the new recovery timestamp
-        assert cell05_recov["timestamp"] == ts_recov
+        # With 2-sample recovery hysteresis, CELL-05 alarms are still present after the first clean step
+        active_alarms_step1 = client.get("/api/v1/alarms?node_id=CELL-05&status=ACTIVE").json()["items"]
+        assert len(active_alarms_step1) > 0
 
-        # CELL-05 metrics must be restored to nominal baseline values
-        assert cell05_recov["radio"]["sinr_db"] >= 15.0
-        assert cell05_recov["performance"]["throughput_mbps"] >= 150.0
-        assert cell05_recov["reliability"]["connection_drop_rate_pct"] < 1.0
+        # Phase 5: Generate Second Recovery Simulation Step (Hysteresis Sample 2)
+        recov_step_resp2 = client.post("/api/v1/telemetry/generate-step")
+        assert recov_step_resp2.status_code == 200
+        ts_recov2 = recov_step_resp2.json()["timestamp"]
+        assert ts_recov2 != ts_recov1
+
+        # Query latest telemetry for CELL-05 after second recovery step
+        telem_recov_resp2 = client.get("/api/v1/telemetry?node_id=CELL-05&limit=1")
+        assert telem_recov_resp2.status_code == 200
+        cell05_recov2 = telem_recov_resp2.json()["items"][0]
+        assert cell05_recov2["timestamp"] == ts_recov2
+        assert cell05_recov2["radio"]["sinr_db"] >= 15.0
+        assert cell05_recov2["performance"]["throughput_mbps"] >= 150.0
+        assert cell05_recov2["reliability"]["connection_drop_rate_pct"] < 1.0
 
         # Query total observations for CELL-05
         all_cell05_resp = client.get("/api/v1/telemetry?node_id=CELL-05&limit=10")
         assert all_cell05_resp.status_code == 200
         cell05_all = all_cell05_resp.json()["items"]
-        assert len(cell05_all) == 3
+        assert len(cell05_all) == 4
         # Chronological timestamps in response (newest first)
-        assert cell05_all[0]["timestamp"] == ts_recov
-        assert cell05_all[1]["timestamp"] == ts_faulted
-        assert cell05_all[2]["timestamp"] == ts_base
+        assert cell05_all[0]["timestamp"] == ts_recov2
+        assert cell05_all[1]["timestamp"] == ts_recov1
+        assert cell05_all[2]["timestamp"] == ts_faulted
+        assert cell05_all[3]["timestamp"] == ts_base
 
-        # Active alarms on CELL-05 must be empty (alarm cleared)
+        # Active alarms on CELL-05 must be zero after the second clean step
         post_active_alarms = client.get("/api/v1/alarms?node_id=CELL-05&status=ACTIVE").json()["items"]
         assert len(post_active_alarms) == 0
 
