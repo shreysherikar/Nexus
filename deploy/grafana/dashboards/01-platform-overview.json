@@ -166,7 +166,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
           "editorMode": "code",
-          "expr": "process_uptime_seconds or vector(0)",
+          "expr": "nexus_process_uptime_seconds",
           "instant": true,
           "range": false,
           "refId": "A"
@@ -229,7 +229,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
           "editorMode": "code",
-          "expr": "sum by (severity) (nexus_alarms_active_total)",
+          "expr": "sum by (severity) (nexus_alarms_active)",
           "legendFormat": "{{severity}}",
           "refId": "A"
         }

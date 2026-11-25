@@ -101,6 +101,7 @@ class NexusMetricsManager:
         self._lock = threading.RLock()
         self._incident_cache: Optional[Any] = None
         self._incident_cache_time: float = 0.0
+        self._process_start_time: float = time.time()
 
         # --- 1. HTTP Request Metrics (Process Lifetime Counters & Histograms) ---
         self.http_requests_total = Counter(
@@ -131,6 +132,12 @@ class NexusMetricsManager:
             "Overall application operational readiness (1=ready, 0=not ready).",
             registry=self.registry,
         )
+        self.process_uptime_seconds = Gauge(
+            "nexus_process_uptime_seconds",
+            "Total elapsed backend process uptime in seconds.",
+            registry=self.registry,
+        )
+        self.process_uptime_seconds.set(0.0)
         self.component_ready = Gauge(
             "nexus_component_ready",
             "Readiness state of individual application subsystems (1=ready, 0=not ready).",
@@ -394,6 +401,7 @@ class NexusMetricsManager:
     def update_domain_metrics(self) -> None:
         """Sample authoritative application subsystems and refresh all Prometheus Gauges."""
         with self._lock:
+            self.process_uptime_seconds.set(max(0.0, time.time() - self._process_start_time))
             self._update_readiness_metrics()
             self._update_telemetry_metrics()
             self._update_alarm_metrics()

@@ -62,6 +62,7 @@
         "defaults": {
           "color": { "mode": "thresholds" },
           "mappings": [],
+          "noValue": "0",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -86,7 +87,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
           "editorMode": "code",
-          "expr": "nexus_fault_affected_nodes_count or vector(0)",
+          "expr": "nexus_fault_affected_nodes_count",
           "instant": true,
           "range": false,
           "refId": "A"

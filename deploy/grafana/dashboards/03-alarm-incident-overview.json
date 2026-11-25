@@ -74,6 +74,7 @@
         "defaults": {
           "color": { "mode": "thresholds" },
           "mappings": [],
+          "noValue": "0",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -101,7 +102,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
           "editorMode": "code",
-          "expr": "nexus_mttd_seconds or vector(0)",
+          "expr": "nexus_mttd_seconds",
           "instant": false,
           "range": true,
           "refId": "A"
@@ -116,6 +117,7 @@
         "defaults": {
           "color": { "mode": "thresholds" },
           "mappings": [],
+          "noValue": "0",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -143,7 +145,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "Prometheus" },
           "editorMode": "code",
-          "expr": "nexus_mttr_seconds or vector(0)",
+          "expr": "nexus_mttr_seconds",
           "instant": false,
           "range": true,
           "refId": "A"
