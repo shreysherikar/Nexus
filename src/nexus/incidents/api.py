@@ -389,7 +389,7 @@ def create_incident(
 def list_incidents(
     status_filter: Optional[IncidentStatus] = Query(None, alias="status", description="Filter by status"),
     severity_filter: Optional[IncidentSeverity] = Query(None, alias="severity", description="Filter by severity"),
-    limit: int = Query(50, ge=1, le=100, description="Page limit"),
+    limit: int = Query(50, ge=1, le=1000, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
     service: IncidentService = Depends(get_incident_service),
 ) -> IncidentListResponse:
